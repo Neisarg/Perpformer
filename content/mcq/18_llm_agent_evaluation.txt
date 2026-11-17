@@ -1,0 +1,178 @@
+# topic: LLM & Agent Evaluation
+# id: llmeval
+# subtopics: Benchmarks, contamination and saturation; Reference-based metrics (BLEU, ROUGE, BERTScore, exact match); LLM-as-judge and rubric design; Pairwise comparison and Elo; RAG evaluation (faithfulness, context precision and recall); Agent evaluation (outcome vs trajectory, pass^k, cost); Statistical rigor in evals; Red-teaming and safety evals; Online monitoring and regression suites
+
+Q: Benchmark contamination means [E]
+- the benchmark has too few questions
+* test items (or close variants) appeared in the model's training data, inflating scores
+- the benchmark is in several languages
+- the grader is another LLM
+> Memorized answers do not reflect capability. Mitigations include private or freshly written test sets, canary strings and time-split evaluation.
+
+Q: ROUGE-L between a summary and a reference is based on [M]
+- embedding cosine similarity
+* the longest common subsequence of words
+- exact string equality
+- the number of sentences
+> ROUGE variants are recall-oriented n-gram or LCS overlaps. They miss paraphrase and can reward copying, so they correlate weakly with quality for modern LLMs.
+
+Q: BERTScore improves on n-gram overlap metrics by [M]
+- using a larger n
+* matching tokens between candidate and reference by contextual embedding similarity
+- asking humans
+- counting characters
+> Soft matching captures synonyms and paraphrases, though it still needs a reference and is insensitive to factual errors.
+
+Q: For an LLM judge, which practice most improves reliability? [M]
+- Asking for a score from 1 to 100 with no criteria
+* A specific rubric with clear criteria, asking for reasoning before the verdict, and a low-cardinality or binary scale
+- Using the highest temperature
+- Hiding the question from the judge
+> Vague numeric scales produce noisy scores. Concrete criteria, examples, reasoning-then-score and coarse labels raise agreement with humans.
+
+Q: In pairwise LLM-judge comparisons, position bias is handled by [M]
+- always putting the new model first
+* evaluating both orderings (A,B and B,A) and counting only consistent verdicts or averaging
+- asking the judge to ignore order
+- using a longer prompt
+> Judges often favour the first or second response. Swapping order and aggregating removes the systematic bias.
+
+Q: Arena-style leaderboards rank models with Elo or Bradley-Terry scores computed from [M]
+- perplexity on a fixed corpus
+* many pairwise human preference votes between anonymous model responses
+- the number of parameters
+- unit tests
+> Pairwise battles produce a rating such that rating differences predict win probabilities; results depend on the prompt distribution and voter population.
+
+Q: In RAG evaluation, "faithfulness" (groundedness) measures whether [M]
+- the retrieved documents are relevant to the question
+* the claims in the answer are supported by the retrieved context
+- the answer is short
+- the answer matches the user's writing style
+> An answer can be faithful to bad context and still wrong, so faithfulness is evaluated together with retrieval quality and answer correctness.
+
+Q: Context recall in RAG evaluation asks [M]
+- how many retrieved chunks are irrelevant
+* whether the retrieved context contains the information needed to produce the reference answer
+- how fast retrieval is
+- whether the answer cites sources
+> Context precision asks how much of what was retrieved is relevant (and ranked highly); recall asks whether anything needed is missing.
+
+Q: Evaluating retrieval and generation separately in a RAG system is useful because [M]
+- it doubles the score
+* it localizes failures: a wrong answer may come from missing context or from the model misusing good context
+- generation cannot be evaluated end to end
+- retrieval has no metrics
+> Component metrics (recall@k, NDCG for the retriever; faithfulness and correctness for the generator) make debugging tractable.
+
+Q: The pass^k metric for agents (as in tau-bench) measures [H]
+- the probability that at least one of k attempts succeeds
+* the probability that all k independent attempts at the same task succeed
+- the number of tool calls per task
+- accuracy on the k hardest tasks
+> pass^k captures reliability: a customer-facing agent must succeed consistently, not just once in several tries (which is what pass@k measures).
+
+Q: Grading an agent on its final outcome rather than its exact sequence of steps is preferred because [M]
+- trajectories cannot be logged
+* many different valid trajectories reach the goal, and matching a reference path penalizes legitimate alternatives
+- outcomes are easier to fake
+- steps are always identical
+> State- or test-based checks verify what matters. Trajectory inspection is still valuable for diagnosing failures, safety violations and efficiency.
+
+Q: Besides task success, which metrics matter most when comparing agent systems? [M]
+- Font size of the output
+* Cost, latency, number of steps and the rate of unsafe or unrecoverable actions
+- The length of the system prompt
+- Vocabulary size
+> Two agents with equal success rates can differ by an order of magnitude in tokens and time, and in the severity of their failures.
+
+Q: An eval has 200 questions and model A scores 71% versus 68% for model B. A reasonable conclusion is [M]
+- A is definitely better
+* the 3-point gap is within sampling noise; compute a confidence interval or a paired test before concluding
+- B is definitely better
+- the eval is broken
+> The standard error of a proportion near 0.7 with n = 200 is about 3 points. Paired analysis on the same items gives a tighter comparison.
+
+Q: When the same questions are answered by two models, the preferred significance analysis is [H]
+- an unpaired z-test treating scores as independent
+* a paired analysis of per-question differences (for example McNemar's test or a paired bootstrap)
+- comparing the two averages by eye
+- a chi-squared test on token counts
+> Question difficulty is shared, so the difference has much lower variance than two independent proportions would suggest.
+
+Q: Goodhart's law applied to benchmarks says [E]
+- larger benchmarks are always better
+* once a benchmark becomes the optimization target, it stops being a good measure of the underlying capability
+- benchmarks should never be public
+- scores should be averaged
+> Over-fitting to public leaderboards (through prompt tuning, selection or leakage) erodes validity; held-out and refreshed evals counter this.
+
+Q: A capability eval and a regression eval differ in that [M]
+- they use different models
+* capability evals target hard tasks with low pass rates to measure progress, while regression evals should stay near 100% to catch breakage
+- regression evals are run only once
+- capability evals need no grader
+> Once a capability eval saturates it can graduate into the regression suite that guards against backsliding.
+
+Q: Exact-match scoring is appropriate when [E]
+- answers are long essays
+* the task has a short, canonical answer, such as a multiple-choice letter or a number
+- style matters more than content
+- there are many valid phrasings
+> For free-form answers, exact match under-counts correct responses; use normalization, semantic matching or model grading.
+
+Q: Human evaluation remains the reference standard, but its main weaknesses are [M]
+- it is too fast and too cheap
+* cost, slow turnaround and inter-annotator disagreement
+- humans cannot read text
+- it cannot be used for chat models
+> Clear guidelines, multiple annotators per item and agreement statistics (such as Cohen's kappa) are needed to make human labels trustworthy.
+
+Q: Red-teaming an LLM system means [M]
+- training it on red-coloured images
+* adversarially probing it for harmful, unsafe or policy-violating behaviour, including jailbreaks and prompt injections
+- measuring its latency under load
+- compressing the model
+> Manual and automated attacks expose failure modes before deployment; findings feed back into safeguards and evals.
+
+Q: Why is perplexity alone a poor measure of a chat assistant's quality? [M]
+- It cannot be computed for Transformers
+* It measures how well the model predicts held-out text, not helpfulness, factuality or instruction following
+- It is always zero
+- It depends only on the tokenizer
+> Lower perplexity indicates better language modeling but says little about task success; it is also not comparable across tokenizers.
+
+Q: Calibration of an LLM's stated confidence is evaluated by [H]
+- counting the words in its answers
+* comparing confidence with empirical accuracy, for example via expected calibration error or a reliability diagram
+- measuring the temperature
+- BLEU score
+> A calibrated model that says "90% sure" is right about 90% of the time. Verbalized confidences and token probabilities can both be assessed this way.
+
+Q: A good golden dataset for evaluating an LLM application is built from [M]
+- random strings
+* representative real user queries, known failure cases and edge cases, with expert-reviewed expected behaviour
+- only the easiest examples
+- the model's own outputs accepted without review
+> Coverage of the true input distribution and of past bugs makes offline scores predictive of production quality.
+
+Q: Online evaluation of a deployed LLM feature typically relies on [M]
+- BLEU against references
+* implicit and explicit user signals (acceptance, edits, retries, thumbs up/down) and A/B tests
+- training loss
+- the number of GPUs
+> Reference answers do not exist in production; behavioural signals and controlled experiments measure real-world impact.
+
+Q: When an LLM judge is the same model family as one of the systems being evaluated, a known risk is [H]
+- the judge refuses to answer
+* self-preference bias: the judge favours outputs that resemble its own style
+- the judge always prefers the other model
+- token limits are exceeded
+> Use a different or multiple judges, validate against human labels and blind the judge to model identity.
+
+Q: For multi-turn agents that talk with users, a scalable evaluation setup is [H]
+- only manual chatting by engineers
+* a simulated user (another LLM with a persona and goal) interacting with the agent, with the final environment state checked against the expected outcome
+- measuring perplexity of each turn
+- scoring only the first message
+> User simulation plus state-based grading tests full conversations with tools reproducibly, as in tau-bench style benchmarks.

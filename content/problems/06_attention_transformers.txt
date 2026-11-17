@@ -1,0 +1,877 @@
+# topic: Attention & Transformers
+# id: attention
+# subtopics: Scaled dot-product attention; Causal and padding masks; Multi-head and grouped-query attention; Positional encodings (sinusoidal, RoPE, ALiBi); Transformer blocks; KV caching; Language-model loss; A minimal GPT
+
+=== scaled-dot-product-attention | Scaled Dot-Product Attention | Medium
+--- description
+Implement `scaled_dot_product_attention(q, k, v, mask=None)` without `F.scaled_dot_product_attention`.
+
+- `q`: `(..., T, d)`, `k`: `(..., S, d)`, `v`: `(..., S, d_v)`
+- `mask`: optional boolean tensor broadcastable to `(..., T, S)`; `True` means the query may attend to that key, `False` means it must not
+
+```
+scores  = q @ k^T / sqrt(d)
+scores  = -inf where mask is False
+weights = softmax(scores, dim=-1)
+output  = weights @ v
+```
+
+Return `(output, weights)`.
+--- starter
+import math
+import torch
+
+
+def scaled_dot_product_attention(q, k, v, mask=None):
+    # TODO
+    pass
+--- solution
+import math
+import torch
+
+
+def scaled_dot_product_attention(q, k, v, mask=None):
+    scores = q @ k.transpose(-2, -1) / math.sqrt(q.shape[-1])
+    if mask is not None:
+        scores = scores.masked_fill(~mask, float("-inf"))
+    weights = torch.softmax(scores, dim=-1)
+    return weights @ v, weights
+--- tests
+def test_no_mask():
+    """Matches the formula without a mask"""
+    q, k, v = torch.randn(2, 4, 8), torch.randn(2, 6, 8), torch.randn(2, 6, 5)
+    out, w = scaled_dot_product_attention(q, k, v)
+    ref_w = torch.softmax(q @ k.transpose(1, 2) / math.sqrt(8), dim=-1)
+    check_shape(out, (2, 4, 5))
+    check_close(w, ref_w, name="weights")
+    check_close(out, ref_w @ v, name="output")
+
+def test_weights_sum_to_one():
+    """Each query's weights sum to 1"""
+    q, k, v = torch.randn(3, 2, 5, 4), torch.randn(3, 2, 7, 4), torch.randn(3, 2, 7, 4)
+    _, w = scaled_dot_product_attention(q, k, v)
+    check_close(w.sum(-1), torch.ones(3, 2, 5))
+
+def test_mask():
+    """Masked keys get zero weight and the rest renormalize"""
+    q, k, v = torch.randn(1, 3, 4), torch.randn(1, 3, 4), torch.randn(1, 3, 4)
+    mask = torch.tril(torch.ones(3, 3, dtype=torch.bool))
+    out, w = scaled_dot_product_attention(q, k, v, mask)
+    check_close(w[0].triu(1), torch.zeros(3, 3), name="weights on masked positions")
+    check_close(w.sum(-1), torch.ones(1, 3), name="row sums")
+    check_close(out[0, 0], v[0, 0], name="first position attends only to itself")
+
+def test_scaling():
+    """Scores are divided by sqrt(d), not d"""
+    q = torch.tensor([[[2.0, 0.0, 0.0, 0.0]]])
+    k = torch.tensor([[[2.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]]])
+    _, w = scaled_dot_product_attention(q, k, k)
+    check_close(w[0, 0], torch.softmax(torch.tensor([2.0, 0.0]), dim=0))
+--- hints
+- masked_fill(~mask, float("-inf")) before the softmax removes the forbidden keys.
+
+=== attention-masks | Causal and Padding Masks | Easy
+--- description
+Implement three helpers that return boolean masks where `True` means "may attend":
+
+- `causal_mask(T)`: `(T, T)`, entry `[i, j]` is True when `j <= i`
+- `padding_mask(lengths, T)`: `(B, T)`, entry `[b, j]` is True when `j < lengths[b]`; `lengths` is a 1-D integer tensor
+- `combined_mask(lengths, T)`: `(B, T, T)`, entry `[b, i, j]` is True when key `j` is both not in the future of `i` and a real token of sequence `b`
+--- starter
+import torch
+
+
+def causal_mask(T: int) -> torch.Tensor:
+    # TODO
+    pass
+
+
+def padding_mask(lengths: torch.Tensor, T: int) -> torch.Tensor:
+    # TODO
+    pass
+
+
+def combined_mask(lengths: torch.Tensor, T: int) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def causal_mask(T: int) -> torch.Tensor:
+    return torch.tril(torch.ones(T, T, dtype=torch.bool))
+
+
+def padding_mask(lengths: torch.Tensor, T: int) -> torch.Tensor:
+    return torch.arange(T).unsqueeze(0) < lengths.unsqueeze(1)
+
+
+def combined_mask(lengths: torch.Tensor, T: int) -> torch.Tensor:
+    return causal_mask(T).unsqueeze(0) & padding_mask(lengths, T).unsqueeze(1)
+--- tests
+def test_causal():
+    """Lower-triangular boolean mask"""
+    m = causal_mask(3)
+    check_true(m.dtype == torch.bool, "mask must be boolean")
+    check_equal(m, torch.tensor([[True, False, False], [True, True, False], [True, True, True]]))
+
+def test_padding():
+    """True for real tokens"""
+    m = padding_mask(torch.tensor([3, 1, 0]), 4)
+    expected = torch.tensor([[True, True, True, False], [True, False, False, False], [False, False, False, False]])
+    check_true(m.dtype == torch.bool, "mask must be boolean")
+    check_equal(m, expected)
+
+def test_combined():
+    """Causal AND key-is-real"""
+    m = combined_mask(torch.tensor([2, 3]), 3)
+    check_shape(m, (2, 3, 3))
+    expected0 = torch.tensor([[True, False, False], [True, True, False], [True, True, False]])
+    check_equal(m[0], expected0, name="sequence of length 2")
+    check_equal(m[1], causal_mask(3), name="full-length sequence")
+--- hints
+- torch.tril on a matrix of ones gives the causal mask.
+- Compare torch.arange(T) with lengths.unsqueeze(1) for the padding mask, then combine with & after unsqueezing.
+
+=== multi-head-attention | Multi-Head Self-Attention | Hard
+--- description
+Implement `MultiHeadAttention(d_model, n_heads)` as an `nn.Module` for self-attention, without `nn.MultiheadAttention` or `F.scaled_dot_product_attention`.
+
+Use four linear layers with bias, with exactly these names: `q_proj`, `k_proj`, `v_proj`, `out_proj` (each `d_model -> d_model`).
+
+`forward(x, mask=None)`:
+
+1. project `x` `(B, T, d_model)` to queries, keys and values
+2. split each into `n_heads` heads of size `d_model // n_heads`: reshape to `(B, T, n_heads, d_head)` and transpose to `(B, n_heads, T, d_head)`
+3. scaled dot-product attention per head; `mask` is a boolean `(T, T)` tensor, `True` = may attend
+4. merge the heads back to `(B, T, d_model)` and apply `out_proj`
+
+Return the output `(B, T, d_model)`.
+--- starter
+import math
+import torch
+import torch.nn as nn
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model: int, n_heads: int):
+        super().__init__()
+        assert d_model % n_heads == 0
+        self.n_heads = n_heads
+        self.d_head = d_model // n_heads
+        # TODO: q_proj, k_proj, v_proj, out_proj
+
+    def forward(self, x: torch.Tensor, mask=None) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import math
+import torch
+import torch.nn as nn
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model: int, n_heads: int):
+        super().__init__()
+        assert d_model % n_heads == 0
+        self.n_heads = n_heads
+        self.d_head = d_model // n_heads
+        self.q_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model)
+        self.v_proj = nn.Linear(d_model, d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor, mask=None) -> torch.Tensor:
+        b, t, d = x.shape
+
+        def split(z):
+            return z.view(b, t, self.n_heads, self.d_head).transpose(1, 2)
+
+        q, k, v = split(self.q_proj(x)), split(self.k_proj(x)), split(self.v_proj(x))
+        scores = q @ k.transpose(-2, -1) / math.sqrt(self.d_head)
+        if mask is not None:
+            scores = scores.masked_fill(~mask, float("-inf"))
+        out = torch.softmax(scores, dim=-1) @ v
+        out = out.transpose(1, 2).contiguous().view(b, t, d)
+        return self.out_proj(out)
+--- tests
+def _pair(d, h):
+    mine = MultiHeadAttention(d, h)
+    ref = torch.nn.MultiheadAttention(d, h, batch_first=True)
+    with torch.no_grad():
+        ref.in_proj_weight.copy_(torch.cat([mine.q_proj.weight, mine.k_proj.weight, mine.v_proj.weight]))
+        ref.in_proj_bias.copy_(torch.cat([mine.q_proj.bias, mine.k_proj.bias, mine.v_proj.bias]))
+        ref.out_proj.weight.copy_(mine.out_proj.weight)
+        ref.out_proj.bias.copy_(mine.out_proj.bias)
+    return mine.eval(), ref.eval()
+
+def test_matches_torch():
+    """Matches nn.MultiheadAttention with the same weights"""
+    mine, ref = _pair(16, 4)
+    x = torch.randn(2, 5, 16)
+    with torch.no_grad():
+        check_close(mine(x), ref(x, x, x, need_weights=False)[0], tol=1e-5)
+
+def test_causal_mask():
+    """Matches nn.MultiheadAttention with a causal mask"""
+    mine, ref = _pair(12, 3)
+    x = torch.randn(3, 6, 12)
+    mask = torch.tril(torch.ones(6, 6, dtype=torch.bool))
+    with torch.no_grad():
+        check_close(mine(x, mask), ref(x, x, x, attn_mask=~mask, need_weights=False)[0], tol=1e-5)
+
+def test_causality():
+    """With a causal mask, changing later tokens does not change earlier outputs"""
+    mine = MultiHeadAttention(8, 2).eval()
+    mask = torch.tril(torch.ones(5, 5, dtype=torch.bool))
+    x = torch.randn(1, 5, 8)
+    x2 = x.clone()
+    x2[:, 3:] = torch.randn(1, 2, 8)
+    with torch.no_grad():
+        check_close(mine(x, mask)[:, :3], mine(x2, mask)[:, :3], tol=1e-6)
+
+def test_parameter_count():
+    """Four d x d projections with biases"""
+    mine = MultiHeadAttention(16, 4)
+    check_equal(sum(p.numel() for p in mine.parameters()), 4 * (16 * 16 + 16), name="parameter count")
+--- hints
+- view(B, T, H, d_head).transpose(1, 2) gives (B, H, T, d_head); matmul then batches over B and H.
+- After attention, transpose(1, 2).contiguous().view(B, T, d_model) merges the heads.
+
+=== sinusoidal-positional-encoding | Sinusoidal Positional Encoding | Easy
+--- description
+Implement `sinusoidal_encoding(max_len, d_model)` from "Attention Is All You Need". Return a `(max_len, d_model)` float tensor with
+
+```
+PE[pos, 2i]     = sin(pos / 10000 ** (2i / d_model))
+PE[pos, 2i + 1] = cos(pos / 10000 ** (2i / d_model))
+```
+
+`d_model` is even.
+--- starter
+import math
+import torch
+
+
+def sinusoidal_encoding(max_len: int, d_model: int) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import math
+import torch
+
+
+def sinusoidal_encoding(max_len: int, d_model: int) -> torch.Tensor:
+    pos = torch.arange(max_len, dtype=torch.float32).unsqueeze(1)
+    div = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float32) * (-math.log(10000.0) / d_model))
+    pe = torch.zeros(max_len, d_model)
+    pe[:, 0::2] = torch.sin(pos * div)
+    pe[:, 1::2] = torch.cos(pos * div)
+    return pe
+--- tests
+def test_first_rows():
+    """Position 0 alternates 0, 1; position 1 starts with sin(1), cos(1)"""
+    pe = sinusoidal_encoding(4, 6)
+    check_shape(pe, (4, 6))
+    check_close(pe[0], [0.0, 1.0, 0.0, 1.0, 0.0, 1.0])
+    check_close(pe[1, :2], [math.sin(1.0), math.cos(1.0)])
+
+def test_reference():
+    """Matches the formula for every entry"""
+    L, d = 20, 8
+    pe = sinusoidal_encoding(L, d)
+    expected = torch.zeros(L, d)
+    for pos in range(L):
+        for i in range(d // 2):
+            angle = pos / (10000 ** (2 * i / d))
+            expected[pos, 2 * i] = math.sin(angle)
+            expected[pos, 2 * i + 1] = math.cos(angle)
+    check_close(pe, expected, tol=1e-4)
+
+def test_unit_pairs():
+    """Each (sin, cos) pair has unit norm"""
+    pe = sinusoidal_encoding(50, 16)
+    check_close(pe[:, 0::2] ** 2 + pe[:, 1::2] ** 2, torch.ones(50, 8), tol=1e-4)
+--- hints
+- Compute the frequencies once: exp(arange(0, d, 2) * -ln(10000) / d).
+- Fill even columns with sin and odd columns with cos of position * frequency.
+
+=== rope | Rotary Position Embeddings (RoPE) | Hard
+--- description
+Implement `apply_rope(x, base=10000.0)` for `x` of shape `(..., T, D)` with `D` even.
+
+For position `p` (0-based index along the `T` dimension) and pair index `i` in `0 .. D/2 - 1`, with angle `theta = p * base ** (-2i / D)`, rotate the pair `(x[2i], x[2i+1])`:
+
+```
+out[2i]     = x[2i] * cos(theta) - x[2i+1] * sin(theta)
+out[2i + 1] = x[2i] * sin(theta) + x[2i+1] * cos(theta)
+```
+
+Return a tensor with the same shape as `x`. In a real model this is applied to queries and keys so that their dot product depends only on the relative position.
+--- starter
+import torch
+
+
+def apply_rope(x: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def apply_rope(x: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
+    t, d = x.shape[-2], x.shape[-1]
+    inv_freq = base ** (-torch.arange(0, d, 2, dtype=torch.float64) / d)
+    angles = torch.arange(t, dtype=torch.float64).unsqueeze(1) * inv_freq.unsqueeze(0)
+    cos, sin = angles.cos().to(x.dtype), angles.sin().to(x.dtype)
+    x_even, x_odd = x[..., 0::2], x[..., 1::2]
+    out = torch.empty_like(x)
+    out[..., 0::2] = x_even * cos - x_odd * sin
+    out[..., 1::2] = x_even * sin + x_odd * cos
+    return out
+--- tests
+def test_reference():
+    """Matches an explicit loop"""
+    x = torch.randn(2, 5, 6, dtype=torch.float64)
+    out = apply_rope(x)
+    expected = torch.zeros_like(x)
+    for p in range(5):
+        for i in range(3):
+            theta = p * 10000.0 ** (-2 * i / 6)
+            a, b = x[:, p, 2 * i], x[:, p, 2 * i + 1]
+            expected[:, p, 2 * i] = a * math.cos(theta) - b * math.sin(theta)
+            expected[:, p, 2 * i + 1] = a * math.sin(theta) + b * math.cos(theta)
+    check_close(out, expected, tol=1e-5)
+
+def test_position_zero_and_norm():
+    """Position 0 is unchanged and rotations preserve the norm"""
+    x = torch.randn(3, 7, 8)
+    out = apply_rope(x)
+    check_shape(out, (3, 7, 8))
+    check_close(out[:, 0], x[:, 0], name="position 0")
+    check_close(out.norm(dim=-1), x.norm(dim=-1), tol=1e-4, name="norms")
+
+def test_relative_property():
+    """Dot products of rotated vectors depend only on the position offset"""
+    q, k = torch.randn(8, dtype=torch.float64), torch.randn(8, dtype=torch.float64)
+    rq = apply_rope(q.expand(10, 8).clone())
+    rk = apply_rope(k.expand(10, 8).clone())
+    scores = rq @ rk.T
+    check_close(scores[2, 5], scores[4, 7], tol=1e-4, name="offset 3 at two absolute positions")
+    check_close(scores[9, 1], scores[8, 0], tol=1e-4, name="offset -8 at two absolute positions")
+    check_true(abs(float(scores[0, 0] - scores[0, 4])) > 1e-3, "scores should change with the offset")
+
+def test_extra_leading_dims():
+    """Works with (B, H, T, D) inputs"""
+    x = torch.randn(2, 3, 4, 6)
+    check_close(apply_rope(x)[1, 2], apply_rope(x[1, 2]), tol=1e-5)
+--- hints
+- Build an angle table of shape (T, D/2) from the outer product of positions and inverse frequencies.
+- Slice even and odd features with x[..., 0::2] and x[..., 1::2].
+
+=== transformer-block | Pre-Norm Transformer Block | Medium
+--- description
+Implement `TransformerBlock(d_model, n_heads, d_ff)` using PyTorch building blocks.
+
+Create these attributes:
+
+- `self.norm1 = nn.LayerNorm(d_model)`
+- `self.attn = nn.MultiheadAttention(d_model, n_heads, batch_first=True)`
+- `self.norm2 = nn.LayerNorm(d_model)`
+- `self.ff = nn.Sequential(nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, d_model))`
+
+`forward(x, causal=False)` for `x` of shape `(B, T, d_model)`:
+
+```
+h = norm1(x)
+x = x + self_attention(h, h, h)      # with a causal mask when causal=True
+x = x + ff(norm2(x))
+```
+
+For `nn.MultiheadAttention`, a boolean `attn_mask` uses `True` for positions that are NOT allowed.
+--- starter
+import torch
+import torch.nn as nn
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, d_model: int, n_heads: int, d_ff: int):
+        super().__init__()
+        # TODO
+
+    def forward(self, x: torch.Tensor, causal: bool = False) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import torch
+import torch.nn as nn
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, d_model: int, n_heads: int, d_ff: int):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(d_model)
+        self.attn = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.ff = nn.Sequential(nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, d_model))
+
+    def forward(self, x: torch.Tensor, causal: bool = False) -> torch.Tensor:
+        t = x.shape[1]
+        mask = torch.triu(torch.ones(t, t, dtype=torch.bool, device=x.device), diagonal=1) if causal else None
+        h = self.norm1(x)
+        x = x + self.attn(h, h, h, attn_mask=mask, need_weights=False)[0]
+        x = x + self.ff(self.norm2(x))
+        return x
+--- tests
+def test_forward():
+    """Pre-norm residual structure"""
+    block = TransformerBlock(16, 4, 32).eval()
+    x = torch.randn(2, 6, 16)
+    with torch.no_grad():
+        h = block.norm1(x)
+        y = x + block.attn(h, h, h, need_weights=False)[0]
+        expected = y + block.ff(block.norm2(y))
+        check_close(block(x), expected, tol=1e-5)
+
+def test_causal():
+    """causal=True hides future positions"""
+    block = TransformerBlock(8, 2, 16).eval()
+    x = torch.randn(1, 7, 8)
+    x2 = x.clone()
+    x2[:, 4:] = torch.randn(1, 3, 8)
+    with torch.no_grad():
+        check_close(block(x, causal=True)[:, :4], block(x2, causal=True)[:, :4], tol=1e-5, name="prefix outputs")
+        diff = (block(x)[:, :4] - block(x2)[:, :4]).abs().max()
+    check_true(diff > 1e-4, "without the causal mask, earlier outputs should depend on later tokens")
+
+def test_shape_and_grad():
+    """Keeps the shape and passes gradients to the input"""
+    block = TransformerBlock(12, 3, 24)
+    x = torch.randn(3, 5, 12, requires_grad=True)
+    out = block(x, causal=True)
+    check_shape(out, (3, 5, 12))
+    out.sum().backward()
+    check_true(x.grad is not None and x.grad.abs().sum() > 0, "no gradient reached the input")
+--- hints
+- Build the boolean causal mask with torch.triu(..., diagonal=1): True means blocked.
+- Call self.attn(h, h, h, attn_mask=mask, need_weights=False)[0] on the normalized input, then add to x.
+
+=== kv-cache | Attention with a KV Cache | Medium
+--- description
+During autoregressive decoding, keys and values of earlier tokens never change, so they are cached.
+
+Implement `attend_with_cache(q_new, k_new, v_new, cache)` for single-head attention:
+
+- `q_new`, `k_new`, `v_new`: `(B, 1, D)` for the newest token
+- `cache`: `None` on the first call, otherwise a dict `{"k": (B, t, D), "v": (B, t, D)}` from previous calls
+
+Steps: append `k_new` and `v_new` to the cache (concatenate along the time dimension), then let `q_new` attend over all cached keys with scaled dot-product attention (divide by `sqrt(D)`).
+
+Return `(output, new_cache)` where `output` is `(B, 1, D)` and `new_cache` holds the extended tensors. Do not modify the input cache in place.
+--- starter
+import math
+import torch
+
+
+def attend_with_cache(q_new, k_new, v_new, cache=None):
+    # TODO
+    pass
+--- solution
+import math
+import torch
+
+
+def attend_with_cache(q_new, k_new, v_new, cache=None):
+    if cache is None:
+        k, v = k_new, v_new
+    else:
+        k = torch.cat([cache["k"], k_new], dim=1)
+        v = torch.cat([cache["v"], v_new], dim=1)
+    scores = q_new @ k.transpose(-2, -1) / math.sqrt(q_new.shape[-1])
+    out = torch.softmax(scores, dim=-1) @ v
+    return out, {"k": k, "v": v}
+--- tests
+def _full_causal(q, k, v):
+    t, d = q.shape[1], q.shape[2]
+    scores = q @ k.transpose(1, 2) / math.sqrt(d)
+    mask = torch.tril(torch.ones(t, t, dtype=torch.bool))
+    return torch.softmax(scores.masked_fill(~mask, float("-inf")), dim=-1) @ v
+
+def test_first_token():
+    """The first token attends only to itself"""
+    q, k, v = torch.randn(2, 1, 4), torch.randn(2, 1, 4), torch.randn(2, 1, 4)
+    out, cache = attend_with_cache(q, k, v, None)
+    check_close(out, v, name="output")
+    check_shape(cache["k"], (2, 1, 4), "cache k")
+
+def test_matches_full_attention():
+    """Step-by-step decoding equals full causal attention"""
+    q, k, v = torch.randn(2, 6, 8), torch.randn(2, 6, 8), torch.randn(2, 6, 8)
+    full = _full_causal(q, k, v)
+    cache, outs = None, []
+    for t in range(6):
+        out, cache = attend_with_cache(q[:, t:t + 1], k[:, t:t + 1], v[:, t:t + 1], cache)
+        outs.append(out)
+    check_close(torch.cat(outs, dim=1), full, tol=1e-5)
+    check_shape(cache["k"], (2, 6, 8), "cache k")
+    check_shape(cache["v"], (2, 6, 8), "cache v")
+
+def test_cache_not_mutated():
+    """The input cache dict is not modified"""
+    q, k, v = torch.randn(1, 1, 4), torch.randn(1, 1, 4), torch.randn(1, 1, 4)
+    _, cache1 = attend_with_cache(q, k, v, None)
+    k1 = cache1["k"].clone()
+    _, cache2 = attend_with_cache(q, torch.randn(1, 1, 4), v, cache1)
+    check_shape(cache1["k"], (1, 1, 4), "old cache k")
+    check_equal(cache1["k"], k1, name="old cache k")
+    check_shape(cache2["k"], (1, 2, 4), "new cache k")
+--- hints
+- On the first call the cache is None: the new key and value are the whole history.
+- torch.cat along dim=1 builds new tensors, so the old cache stays intact.
+
+=== lm-loss | Next-Token Prediction Loss | Easy
+--- description
+Implement `lm_loss(logits, tokens, pad_id)` for training a causal language model.
+
+- `logits`: `(B, T, V)`, where `logits[b, t]` is the model's prediction for the token that follows `tokens[b, t]`
+- `tokens`: `(B, T)` input token ids
+
+The target for position `t` is `tokens[b, t + 1]`, so the last position has no target. Return the mean cross-entropy over all positions whose target is not `pad_id`.
+--- starter
+import torch
+import torch.nn.functional as F
+
+
+def lm_loss(logits: torch.Tensor, tokens: torch.Tensor, pad_id: int = 0) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn.functional as F
+
+
+def lm_loss(logits: torch.Tensor, tokens: torch.Tensor, pad_id: int = 0) -> torch.Tensor:
+    v = logits.shape[-1]
+    pred = logits[:, :-1].reshape(-1, v)
+    target = tokens[:, 1:].reshape(-1)
+    return F.cross_entropy(pred, target, ignore_index=pad_id)
+--- tests
+def test_shift():
+    """Targets are the inputs shifted left by one"""
+    logits = torch.randn(2, 5, 7)
+    tokens = torch.randint(1, 7, (2, 5))
+    total, count = 0.0, 0
+    logp = torch.log_softmax(logits, dim=-1)
+    for b in range(2):
+        for t in range(4):
+            total += -logp[b, t, tokens[b, t + 1]].item()
+            count += 1
+    check_close(lm_loss(logits, tokens, pad_id=0), total / count)
+
+def test_padding_ignored():
+    """Positions whose target is the pad id do not contribute"""
+    logits = torch.randn(1, 4, 5)
+    tokens = torch.tensor([[2, 3, 0, 0]])
+    expected = -torch.log_softmax(logits[0, 0], dim=-1)[3]
+    check_close(lm_loss(logits, tokens, pad_id=0), expected)
+
+def test_perfect_prediction():
+    """Confident correct predictions give a loss near zero"""
+    tokens = torch.tensor([[1, 2, 3, 4]])
+    logits = torch.full((1, 4, 6), -20.0)
+    for t in range(3):
+        logits[0, t, tokens[0, t + 1]] = 20.0
+    check_close(lm_loss(logits, tokens, pad_id=0), 0.0, tol=1e-4)
+--- hints
+- Drop the last logit position and the first token: logits[:, :-1] against tokens[:, 1:].
+- Flatten both and use F.cross_entropy with ignore_index=pad_id.
+
+=== grouped-query-attention | Grouped-Query Attention | Medium
+--- description
+In grouped-query attention (GQA), several query heads share one key/value head, shrinking the KV cache.
+
+Implement `grouped_query_attention(q, k, v)`:
+
+- `q`: `(B, Hq, T, d)` query heads
+- `k`, `v`: `(B, Hkv, S, d)` key/value heads, where `Hq` is a multiple of `Hkv`
+- query head `h` uses key/value head `h // (Hq // Hkv)`
+
+Apply scaled dot-product attention (divide by `sqrt(d)`, no mask) and return `(B, Hq, T, d)`.
+
+`Hkv == Hq` is ordinary multi-head attention and `Hkv == 1` is multi-query attention.
+--- starter
+import math
+import torch
+
+
+def grouped_query_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import math
+import torch
+
+
+def grouped_query_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    groups = q.shape[1] // k.shape[1]
+    k = k.repeat_interleave(groups, dim=1)
+    v = v.repeat_interleave(groups, dim=1)
+    scores = q @ k.transpose(-2, -1) / math.sqrt(q.shape[-1])
+    return torch.softmax(scores, dim=-1) @ v
+--- tests
+def _reference(q, k, v):
+    hq, hkv, d = q.shape[1], k.shape[1], q.shape[-1]
+    g = hq // hkv
+    outs = []
+    for h in range(hq):
+        kk, vv = k[:, h // g], v[:, h // g]
+        w = torch.softmax(q[:, h] @ kk.transpose(1, 2) / math.sqrt(d), dim=-1)
+        outs.append(w @ vv)
+    return torch.stack(outs, dim=1)
+
+def test_grouped():
+    """8 query heads sharing 2 KV heads"""
+    q, k, v = torch.randn(2, 8, 5, 4), torch.randn(2, 2, 7, 4), torch.randn(2, 2, 7, 4)
+    out = grouped_query_attention(q, k, v)
+    check_shape(out, (2, 8, 5, 4))
+    check_close(out, _reference(q, k, v), tol=1e-5)
+
+def test_multi_head_case():
+    """Hkv == Hq is standard multi-head attention"""
+    q, k, v = torch.randn(1, 4, 3, 6), torch.randn(1, 4, 3, 6), torch.randn(1, 4, 3, 6)
+    check_close(grouped_query_attention(q, k, v), _reference(q, k, v), tol=1e-5)
+
+def test_multi_query_case():
+    """Hkv == 1: identical query heads give identical outputs"""
+    q1 = torch.randn(2, 1, 4, 8)
+    q = q1.expand(2, 6, 4, 8).clone()
+    k, v = torch.randn(2, 1, 5, 8), torch.randn(2, 1, 5, 8)
+    out = grouped_query_attention(q, k, v)
+    check_close(out[:, 0], out[:, 5], tol=1e-6)
+    check_close(out, _reference(q, k, v), tol=1e-5)
+--- hints
+- repeat_interleave(groups, dim=1) turns (B, Hkv, S, d) into (B, Hq, S, d) with each KV head repeated for its group.
+
+=== swiglu | SwiGLU Feed-Forward Layer | Easy
+--- description
+Implement the gated feed-forward layer used in Llama-style models.
+
+`SwiGLU(dim, hidden)` has three bias-free linear layers with these names:
+
+- `w1`: `dim -> hidden`
+- `w3`: `dim -> hidden` (the gate branch's partner)
+- `w2`: `hidden -> dim`
+
+```
+forward(x) = w2(silu(w1(x)) * w3(x))
+```
+--- starter
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class SwiGLU(nn.Module):
+    def __init__(self, dim: int, hidden: int):
+        super().__init__()
+        # TODO
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class SwiGLU(nn.Module):
+    def __init__(self, dim: int, hidden: int):
+        super().__init__()
+        self.w1 = nn.Linear(dim, hidden, bias=False)
+        self.w3 = nn.Linear(dim, hidden, bias=False)
+        self.w2 = nn.Linear(hidden, dim, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+--- tests
+def test_forward():
+    """w2(silu(w1 x) * w3 x)"""
+    ff = SwiGLU(8, 20)
+    x = torch.randn(2, 3, 8)
+    a, b = x @ ff.w1.weight.T, x @ ff.w3.weight.T
+    expected = (a * torch.sigmoid(a) * b) @ ff.w2.weight.T
+    check_close(ff(x), expected, tol=1e-5)
+
+def test_parameters():
+    """Three bias-free matrices"""
+    ff = SwiGLU(16, 40)
+    check_equal(sum(p.numel() for p in ff.parameters()), 3 * 16 * 40, name="parameter count")
+    check_true(ff.w1.bias is None and ff.w2.bias is None and ff.w3.bias is None, "layers must not have biases")
+
+def test_gate_closes():
+    """A zero gate branch zeroes the output"""
+    ff = SwiGLU(4, 8)
+    with torch.no_grad():
+        ff.w3.weight.zero_()
+    check_close(ff(torch.randn(5, 4)), torch.zeros(5, 4))
+--- hints
+- Create three nn.Linear layers with bias=False.
+- The gate is an element-wise product of silu(w1(x)) and w3(x).
+
+=== alibi-bias | ALiBi Attention Bias | Medium
+--- description
+ALiBi replaces position embeddings with a fixed bias added to attention scores that penalizes distant keys.
+
+Implement `alibi_bias(n_heads, T)` returning a float tensor of shape `(n_heads, T, T)`:
+
+- head `h` (0-based) has slope `m_h = 2 ** (-8 * (h + 1) / n_heads)`
+- for `j <= i`: `bias[h, i, j] = -m_h * (i - j)`
+- for `j > i` (future positions): `bias[h, i, j] = -inf`
+--- starter
+import torch
+
+
+def alibi_bias(n_heads: int, T: int) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def alibi_bias(n_heads: int, T: int) -> torch.Tensor:
+    slopes = torch.tensor([2.0 ** (-8.0 * (h + 1) / n_heads) for h in range(n_heads)])
+    pos = torch.arange(T)
+    dist = (pos.unsqueeze(1) - pos.unsqueeze(0)).float()
+    bias = -slopes.view(n_heads, 1, 1) * dist.unsqueeze(0)
+    future = pos.unsqueeze(0) > pos.unsqueeze(1)
+    return bias.masked_fill(future.unsqueeze(0), float("-inf"))
+--- tests
+def test_values():
+    """Slopes and distances for 2 heads"""
+    b = alibi_bias(2, 3)
+    check_shape(b, (2, 3, 3))
+    inf = float("-inf")
+    expected0 = torch.tensor([[0.0, inf, inf], [-0.0625, 0.0, inf], [-0.125, -0.0625, 0.0]])
+    expected1 = torch.tensor([[0.0, inf, inf], [-0.00390625, 0.0, inf], [-0.0078125, -0.00390625, 0.0]])
+    check_true(torch.equal(torch.isinf(b[0]), torch.isinf(expected0)), "future positions must be -inf")
+    finite = ~torch.isinf(expected0)
+    check_close(b[0][finite], expected0[finite], tol=1e-6, name="head 0")
+    check_close(b[1][finite], expected1[finite], tol=1e-7, name="head 1")
+
+def test_eight_heads():
+    """With 8 heads the slopes are 1/2, 1/4, ..., 1/256"""
+    b = alibi_bias(8, 5)
+    slopes = -b[:, 1, 0]
+    check_close(slopes, [2.0 ** -(i + 1) for i in range(8)], tol=1e-7)
+
+def test_softmax_prefers_recent():
+    """Used as attention scores, nearer keys get more weight and future keys none"""
+    w = torch.softmax(alibi_bias(1, 6)[0], dim=-1)
+    check_close(w.triu(1), torch.zeros(6, 6), name="weights on future positions")
+    check_true(bool((w[5, 1:6] > w[5, 0:5]).all()), "weights should increase toward the current position")
+--- hints
+- Distance matrix: i - j from two aranges with broadcasting.
+- Multiply by per-head slopes shaped (H, 1, 1) and fill j > i with -inf.
+
+=== tiny-gpt | A Minimal GPT | Hard
+--- description
+Build a small decoder-only language model: `TinyGPT(vocab_size, d_model, n_heads, n_layers, max_len)`.
+
+Requirements:
+
+- `self.tok_emb = nn.Embedding(vocab_size, d_model)` and a learned position embedding for positions `0 .. max_len - 1`
+- `n_layers` pre-norm Transformer blocks with causal self-attention (you may use `nn.MultiheadAttention` or `nn.TransformerEncoderLayer(..., batch_first=True, norm_first=True, dropout=0.0)` with a causal mask)
+- a final `LayerNorm`
+- `self.head = nn.Linear(d_model, vocab_size, bias=False)` whose weight is tied to the token embedding: `self.head.weight` must be the same parameter object as `self.tok_emb.weight`
+- `forward(ids)` takes `(B, T)` token ids with `T <= max_len` and returns logits `(B, T, vocab_size)`
+
+Use no dropout so the model is deterministic.
+--- starter
+import torch
+import torch.nn as nn
+
+
+class TinyGPT(nn.Module):
+    def __init__(self, vocab_size: int, d_model: int = 32, n_heads: int = 4, n_layers: int = 2, max_len: int = 64):
+        super().__init__()
+        # TODO
+
+    def forward(self, ids: torch.Tensor) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import torch
+import torch.nn as nn
+
+
+class TinyGPT(nn.Module):
+    def __init__(self, vocab_size: int, d_model: int = 32, n_heads: int = 4, n_layers: int = 2, max_len: int = 64):
+        super().__init__()
+        self.tok_emb = nn.Embedding(vocab_size, d_model)
+        self.pos_emb = nn.Embedding(max_len, d_model)
+        self.blocks = nn.ModuleList([
+            nn.TransformerEncoderLayer(d_model, n_heads, 4 * d_model, dropout=0.0, activation="gelu",
+                                       batch_first=True, norm_first=True)
+            for _ in range(n_layers)
+        ])
+        self.ln_f = nn.LayerNorm(d_model)
+        self.head = nn.Linear(d_model, vocab_size, bias=False)
+        self.head.weight = self.tok_emb.weight
+
+    def forward(self, ids: torch.Tensor) -> torch.Tensor:
+        t = ids.shape[1]
+        x = self.tok_emb(ids) + self.pos_emb(torch.arange(t, device=ids.device))
+        mask = torch.triu(torch.ones(t, t, dtype=torch.bool, device=ids.device), diagonal=1)
+        for block in self.blocks:
+            x = block(x, src_mask=mask)
+        return self.head(self.ln_f(x))
+--- tests
+def test_shape():
+    """Logits have shape (B, T, vocab)"""
+    model = TinyGPT(50, d_model=32, n_heads=4, n_layers=2, max_len=16)
+    with torch.no_grad():
+        check_shape(model(torch.randint(0, 50, (3, 10))), (3, 10, 50))
+
+def test_causal():
+    """Logits at a position do not depend on later tokens"""
+    model = TinyGPT(30, d_model=32, n_heads=2, n_layers=2, max_len=12)
+    ids = torch.randint(0, 30, (2, 12))
+    ids2 = ids.clone()
+    ids2[:, 7:] = (ids[:, 7:] + 1) % 30
+    with torch.no_grad():
+        a, b = model(ids), model(ids2)
+    check_close(a[:, :7], b[:, :7], tol=1e-4, name="logits before the changed tokens")
+    check_true((a[:, 7:] - b[:, 7:]).abs().max() > 1e-4, "logits after the change should differ")
+
+def test_position_information():
+    """Swapping two earlier tokens changes the prediction at the end"""
+    model = TinyGPT(20, d_model=32, n_heads=2, n_layers=1, max_len=8)
+    a = torch.tensor([[3, 7, 5, 9]])
+    b = torch.tensor([[7, 3, 5, 9]])
+    with torch.no_grad():
+        diff = (model(a)[:, -1] - model(b)[:, -1]).abs().max()
+    check_true(diff > 1e-5, "the model ignores token order; add position embeddings")
+
+def test_weight_tying():
+    """The output head shares its weight with the token embedding"""
+    model = TinyGPT(40, d_model=16, n_heads=2, n_layers=1, max_len=8)
+    check_true(model.head.weight is model.tok_emb.weight, "head.weight must be the same parameter as tok_emb.weight")
+    names = [n for n, _ in model.named_parameters()]
+    check_true(sum(1 for n in names if n in ("head.weight", "tok_emb.weight")) == 1, "the tied weight should be counted once")
+
+def test_trains():
+    """A few optimizer steps reduce the next-token loss on a repeating sequence"""
+    model = TinyGPT(8, d_model=32, n_heads=2, n_layers=1, max_len=16)
+    ids = torch.tensor([[1, 2, 3, 4] * 4])
+    opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+    losses = []
+    for _ in range(100):
+        logits = model(ids)
+        loss = torch.nn.functional.cross_entropy(logits[:, :-1].reshape(-1, 8), ids[:, 1:].reshape(-1))
+        opt.zero_grad(); loss.backward(); opt.step()
+        losses.append(loss.item())
+    check_true(losses[-1] < 0.5 * losses[0], "loss did not drop: %.3f -> %.3f" % (losses[0], losses[-1]))
+--- hints
+- Build the causal mask with torch.triu(torch.ones(T, T, dtype=torch.bool), diagonal=1); True marks positions that may not be attended to.
+- Tie the weights by assigning self.head.weight = self.tok_emb.weight after creating both layers.

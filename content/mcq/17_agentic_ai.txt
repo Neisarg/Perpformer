@@ -1,0 +1,178 @@
+# topic: Agentic AI
+# id: agents
+# subtopics: The agent loop (reason, act, observe); Tool use and function calling; Planning and task decomposition; Memory and context engineering; Multi-agent orchestration; Protocols (MCP, agent-to-agent); Agent evaluation and reliability; Security, sandboxing and prompt injection; Computer-use and coding agents
+
+Q: Which best describes an LLM agent, as opposed to a single LLM call or a fixed workflow? [E]
+- A model with more parameters
+* A system in which the model repeatedly decides which actions (tool calls) to take, observes results and continues until the task is done
+- A prompt template with variables
+- A fine-tuned classifier
+> In a workflow the control flow is written in code; in an agent the model directs its own steps in a loop with tools and feedback from the environment.
+
+Q: In the ReAct pattern, each step of the agent consists of [E]
+- retrieval, ranking, generation
+* a thought (reasoning), an action (tool call) and an observation (tool result)
+- encode, decode, verify
+- plan, compile, deploy
+> Interleaving reasoning with actions lets the model use fresh observations to decide the next step.
+
+Q: With function calling, the model itself [M]
+- executes the function inside its weights
+* emits a structured request (tool name and JSON arguments) that the application executes and returns as a tool result
+- compiles the function to machine code
+- edits the tool's source code
+> The model only produces the call; the host application runs it and feeds the output back into the conversation.
+
+Q: A tool's description and parameter schema matter because [M]
+- they are ignored by the model
+* the model chooses and fills in tools based on them, so vague descriptions cause wrong or malformed calls
+- they determine the model's temperature
+- they are compiled into the weights
+> Tool definitions are part of the prompt. Clear names, when-to-use guidance, typed parameters and examples improve tool selection.
+
+Q: The Model Context Protocol (MCP) is [M]
+- a new Transformer architecture
+* an open protocol that standardizes how applications expose tools, resources and prompts to LLM clients
+- a training algorithm for agents
+- a vector database
+> MCP uses a client-server design (JSON-RPC over stdio or HTTP) so a tool integration written once works across compatible hosts.
+
+Q: The main reason long-running agents need context management (compaction, summarization, note-taking) is [M]
+- tools stop working after 10 calls
+* the context window is finite and accuracy degrades as it fills with stale tool outputs
+- models forget their weights
+- the tokenizer changes over time
+> Context is a limited resource: pruning old tool results, summarizing history and storing notes outside the window keep the relevant information available.
+
+Q: Which is an example of long-term (persistent) agent memory? [M]
+- The current system prompt
+- The KV cache
+* Facts and summaries written to a file or database and retrieved in later sessions
+- The sampling temperature
+> Short-term memory is the context window; long-term memory lives outside it and is brought back via retrieval or explicit reads.
+
+Q: In an orchestrator-worker multi-agent design, sub-agents are useful mainly because [M]
+- they share one context window
+* each works in its own context on a sub-task and returns a condensed result, enabling parallelism and keeping the lead agent's context clean
+- they eliminate token costs
+- they need no instructions
+> Isolation prevents intermediate tool noise from polluting the main context. The trade-off is higher total token use and coordination overhead.
+
+Q: A common failure when delegating to sub-agents is [M]
+- sub-agents running too fast
+* under-specified task descriptions, leading to duplicated work, gaps or misinterpreted goals
+- sub-agents sharing gradients
+- too few tokens being used
+> A sub-agent only knows what its brief contains: objective, output format, tools and boundaries should be explicit.
+
+Q: An agent succeeds at each individual step with probability 0.95 and needs 20 independent steps. Its overall success probability is about [M]
+- 95%
+- 75%
+* 36%
+- 5%
+> 0.95^20 is about 0.358. Errors compound over long horizons, which is why verification, retries and checkpoints matter.
+
+Q: Which evaluation approach best fits a coding agent? [M]
+- BLEU score against a reference patch
+* Running the task end to end in a sandbox and checking the outcome with tests
+- Counting the number of tool calls only
+- Measuring perplexity of the output
+> Outcome-based evaluation (as in SWE-bench style tasks) checks whether the final state is correct; trajectories can differ and still succeed.
+
+Q: Agent evaluations should be run multiple times per task because [M]
+- models are deterministic
+* agent behaviour is stochastic and small differences early on compound, so a single run is a noisy estimate
+- tasks change between runs
+- the grader needs warm-up
+> Report success rates with confidence intervals over several trials; metrics like pass^k capture consistency.
+
+Q: The "lethal trifecta" for agent security is the combination of [H]
+- large context, high temperature and long outputs
+* access to private data, exposure to untrusted content and the ability to communicate externally
+- web search, code execution and file reading
+- three sub-agents with shared memory
+> With all three, a prompt injection in untrusted content can make the agent exfiltrate private data. Removing any one leg breaks the attack.
+
+Q: The most robust defence against an agent taking a harmful irreversible action is [M]
+- a longer system prompt
+* enforcing permissions outside the model: least-privilege tools, sandboxing and human approval for sensitive actions
+- lowering the temperature to 0
+- asking the model to promise to behave
+> Prompt-level instructions can be bypassed; deterministic controls at the tool and environment level bound the damage.
+
+Q: Plan-and-execute agents differ from pure ReAct agents in that they [M]
+- never call tools
+* first produce an explicit multi-step plan, then carry out the steps, revising the plan when needed
+- use two different tokenizers
+- cannot handle errors
+> Upfront planning helps on long tasks and allows cheaper models to execute steps; re-planning handles surprises.
+
+Q: Reflection (as in Reflexion) improves agents by [M]
+- increasing the context window
+* having the agent critique failed attempts and store the lessons as text to guide later attempts
+- fine-tuning after every step
+- deleting the conversation history
+> Verbal self-feedback acts as a form of learning without weight updates.
+
+Q: "Code execution" as an agent tool is powerful because [M]
+- code runs inside the model's weights
+* one tool lets the model compose arbitrary computation, process large data outside the context and call many APIs programmatically
+- it removes the need for a sandbox
+- it cannot produce errors
+> Writing code to chain operations keeps intermediate data out of the context window and gives exact computation; it must run in an isolated environment.
+
+Q: Agentic RAG differs from classic single-shot RAG in that [M]
+- it uses no retriever
+* the model decides when and what to search, can issue several refined queries and reads results iteratively
+- documents are always loaded entirely into the prompt
+- it requires fine-tuning the retriever
+> Retrieval becomes a tool in a loop, which helps multi-hop questions at the cost of latency and tokens.
+
+Q: A good tool result for an agent is [M]
+- as long and raw as possible
+* concise and high-signal, with clear error messages that say how to recover
+- always returned as an image
+- hidden from the model
+> Tool outputs consume context. Returning only relevant fields, paginating and giving actionable errors help the model continue correctly.
+
+Q: Computer-use agents interact with software by [M]
+- calling private internal APIs of each application
+* perceiving the screen (screenshots or accessibility trees) and issuing mouse and keyboard actions
+- modifying the operating system kernel
+- reading the application's source code only
+> They operate GUIs like a human would, which generalizes across applications but is slower and less reliable than dedicated APIs.
+
+Q: Which signal most strongly suggests a task needs an agent rather than a fixed workflow? [M]
+- The task has exactly three known steps
+* The number and order of steps cannot be predicted in advance and depend on intermediate results
+- Latency must be under 100 ms
+- The output is a single label
+> Predictable tasks are cheaper and more reliable as workflows (prompt chaining, routing). Open-ended tasks benefit from model-driven control.
+
+Q: Reinforcement learning for agents (agentic RL) typically rewards [H]
+- each token's likelihood under a teacher
+* the outcome of whole multi-step trajectories in an environment, such as tests passing
+- the number of tools defined
+- shorter system prompts
+> Verifiable end-of-task rewards train policies for long-horizon tool use; credit assignment and environment quality are the main difficulties.
+
+Q: Checkpointing an agent's state and making its tools idempotent matters because [H]
+- it increases temperature
+* long tasks fail midway; resuming from a checkpoint must not repeat side effects such as sending the same email twice
+- it reduces vocabulary size
+- it removes the need for evaluation
+> Durable execution lets an agent recover from crashes and timeouts; idempotency keys make retries safe.
+
+Q: The "agent harness" refers to [M]
+- the model's weights
+* the scaffolding around the model: the loop, tools, context management, permissions and prompts
+- the GPU cluster
+- the evaluation dataset
+> Two products using the same model can behave very differently because of harness design; benchmarks measure model and harness together.
+
+Q: An agent's trajectory looks reasonable step by step, but the final answer is wrong and it reports success. The most useful mitigation is [H]
+- removing all tools
+* adding an explicit verification step with ground-truth checks (tests, re-reading sources) before completion, ideally by an independent checker
+- raising the temperature
+- shortening the task description
+> Agents tend to over-claim completion. Grounded verification catches errors that self-assessment misses.

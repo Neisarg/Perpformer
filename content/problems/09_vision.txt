@@ -1,0 +1,534 @@
+# topic: Computer Vision
+# id: vision
+# subtopics: Convolution arithmetic; Box IoU and non-maximum suppression; Patches and ViT embeddings; Depthwise separable convolutions; Mixup; Dice loss
+
+=== conv-output-shape | Convolution Output Shape | Easy
+--- description
+Implement `conv_output_shape(h, w, kernel, stride=1, padding=0, dilation=1)` returning `(h_out, w_out)` as ints for a 2-D convolution with a square kernel:
+
+```
+out = floor((n + 2 * padding - dilation * (kernel - 1) - 1) / stride) + 1
+```
+--- starter
+def conv_output_shape(h: int, w: int, kernel: int, stride: int = 1, padding: int = 0, dilation: int = 1):
+    # TODO
+    pass
+--- solution
+def conv_output_shape(h: int, w: int, kernel: int, stride: int = 1, padding: int = 0, dilation: int = 1):
+    def one(n):
+        return (n + 2 * padding - dilation * (kernel - 1) - 1) // stride + 1
+    return one(h), one(w)
+--- tests
+def test_basic():
+    """32 x 32 input, 5 x 5 kernel"""
+    check_equal(tuple(conv_output_shape(32, 32, 5)), (28, 28))
+
+def test_same_padding():
+    """3 x 3 kernel with padding 1 keeps the size"""
+    check_equal(tuple(conv_output_shape(17, 40, 3, padding=1)), (17, 40))
+
+def test_stride_floor():
+    """Stride 2 with an odd size rounds down"""
+    check_equal(tuple(conv_output_shape(7, 8, 3, stride=2)), (3, 3))
+    check_equal(tuple(conv_output_shape(224, 224, 7, stride=2, padding=3)), (112, 112))
+
+def test_matches_conv2d():
+    """Agrees with nn.Conv2d for several settings, including dilation"""
+    for k, s, p, d in [(3, 1, 0, 1), (3, 2, 1, 1), (5, 3, 2, 1), (3, 1, 2, 2), (2, 2, 0, 3), (1, 1, 0, 1)]:
+        conv = torch.nn.Conv2d(1, 1, k, stride=s, padding=p, dilation=d)
+        out = conv(torch.zeros(1, 1, 23, 31))
+        check_equal(tuple(conv_output_shape(23, 31, k, s, p, d)), tuple(out.shape[-2:]), name="k=%d s=%d p=%d d=%d" % (k, s, p, d))
+--- hints
+- A dilated kernel covers dilation * (kernel - 1) + 1 pixels. Integer division (//) implements the floor.
+
+=== box-iou | Pairwise Box IoU | Medium
+--- description
+Implement `box_iou(a, b)` for boxes in `(x1, y1, x2, y2)` format with `x1 < x2` and `y1 < y2`.
+
+- `a`: `(N, 4)`, `b`: `(M, 4)`
+- returns an `(N, M)` tensor where entry `[i, j]` is the intersection area divided by the union area of `a[i]` and `b[j]`
+
+Vectorize with broadcasting: no Python loops. Do not use `torchvision`.
+--- starter
+import torch
+
+
+def box_iou(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def box_iou(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    area_a = (a[:, 2] - a[:, 0]) * (a[:, 3] - a[:, 1])
+    area_b = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
+    top_left = torch.max(a[:, None, :2], b[None, :, :2])
+    bottom_right = torch.min(a[:, None, 2:], b[None, :, 2:])
+    wh = (bottom_right - top_left).clamp(min=0)
+    inter = wh[..., 0] * wh[..., 1]
+    return inter / (area_a[:, None] + area_b[None, :] - inter)
+--- tests
+def test_hand_example():
+    """Overlapping, identical and disjoint boxes"""
+    a = torch.tensor([[0.0, 0.0, 2.0, 2.0]])
+    b = torch.tensor([[1.0, 1.0, 3.0, 3.0], [0.0, 0.0, 2.0, 2.0], [5.0, 5.0, 6.0, 6.0]])
+    check_close(box_iou(a, b), [[1 / 7, 1.0, 0.0]])
+
+def test_touching_boxes():
+    """Boxes sharing only an edge have IoU 0"""
+    a = torch.tensor([[0.0, 0.0, 1.0, 1.0]])
+    b = torch.tensor([[1.0, 0.0, 2.0, 1.0]])
+    check_close(box_iou(a, b), [[0.0]])
+
+def test_contained_box():
+    """A box inside another: IoU is the ratio of areas"""
+    a = torch.tensor([[0.0, 0.0, 10.0, 10.0]])
+    b = torch.tensor([[2.0, 2.0, 4.0, 7.0]])
+    check_close(box_iou(a, b), [[10 / 100]])
+
+def test_random_against_loop():
+    """Matches a per-pair loop and has shape (N, M)"""
+    def rand_boxes(n):
+        xy = torch.rand(n, 2) * 10
+        return torch.cat([xy, xy + torch.rand(n, 2) * 5 + 0.1], dim=1)
+    a, b = rand_boxes(6), rand_boxes(9)
+    out = box_iou(a, b)
+    check_shape(out, (6, 9))
+    expected = torch.zeros(6, 9)
+    for i in range(6):
+        for j in range(9):
+            w = max(0.0, min(a[i, 2], b[j, 2]).item() - max(a[i, 0], b[j, 0]).item())
+            h = max(0.0, min(a[i, 3], b[j, 3]).item() - max(a[i, 1], b[j, 1]).item())
+            inter = w * h
+            union = ((a[i, 2] - a[i, 0]) * (a[i, 3] - a[i, 1]) + (b[j, 2] - b[j, 0]) * (b[j, 3] - b[j, 1])).item() - inter
+            expected[i, j] = inter / union
+    check_close(out, expected, tol=1e-4)
+--- hints
+- The intersection's top-left corner is the element-wise max of the two top-left corners; its bottom-right is the min of the bottom-right corners.
+- Clamp the width and height at 0 for boxes that do not overlap.
+
+=== nms | Non-Maximum Suppression | Hard
+--- description
+Implement `nms(boxes, scores, iou_threshold)`.
+
+- `boxes`: `(N, 4)` in `(x1, y1, x2, y2)` format, `scores`: `(N,)`
+- repeatedly select the highest-scoring remaining box, then discard every remaining box whose IoU with it is strictly greater than `iou_threshold`
+- return the indices of the kept boxes as a `torch.long` tensor, ordered by decreasing score
+
+For an empty input return an empty `torch.long` tensor. Do not use `torchvision.ops.nms`.
+--- starter
+import torch
+
+
+def nms(boxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def nms(boxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float) -> torch.Tensor:
+    if boxes.numel() == 0:
+        return torch.empty(0, dtype=torch.long)
+    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    order = scores.argsort(descending=True)
+    keep = []
+    while order.numel() > 0:
+        i = order[0]
+        keep.append(i.item())
+        rest = order[1:]
+        if rest.numel() == 0:
+            break
+        tl = torch.max(boxes[i, :2], boxes[rest, :2])
+        br = torch.min(boxes[i, 2:], boxes[rest, 2:])
+        wh = (br - tl).clamp(min=0)
+        inter = wh[:, 0] * wh[:, 1]
+        iou = inter / (areas[i] + areas[rest] - inter)
+        order = rest[iou <= iou_threshold]
+    return torch.tensor(keep, dtype=torch.long)
+--- tests
+def test_basic():
+    """Two overlapping boxes and one separate box"""
+    boxes = torch.tensor([[0.0, 0.0, 10.0, 10.0], [1.0, 1.0, 11.0, 11.0], [50.0, 50.0, 60.0, 60.0]])
+    scores = torch.tensor([0.9, 0.8, 0.7])
+    check_equal(nms(boxes, scores, 0.5), torch.tensor([0, 2]))
+
+def test_order_by_score():
+    """Kept indices are sorted by decreasing score"""
+    boxes = torch.tensor([[0.0, 0.0, 1.0, 1.0], [5.0, 5.0, 6.0, 6.0], [10.0, 10.0, 11.0, 11.0]])
+    scores = torch.tensor([0.2, 0.9, 0.5])
+    out = nms(boxes, scores, 0.5)
+    check_equal(out, torch.tensor([1, 2, 0]))
+    check_true(out.dtype == torch.long, "indices must be torch.long")
+
+def test_threshold_is_strict():
+    """A box with IoU exactly equal to the threshold is kept"""
+    boxes = torch.tensor([[0.0, 0.0, 2.0, 2.0], [0.0, 0.0, 2.0, 1.0]])
+    scores = torch.tensor([0.9, 0.8])
+    check_equal(nms(boxes, scores, 0.5), torch.tensor([0, 1]), name="IoU == threshold")
+    check_equal(nms(boxes, scores, 0.49), torch.tensor([0]), name="IoU > threshold")
+
+def test_chain_suppression():
+    """A suppressed box cannot suppress others"""
+    boxes = torch.tensor([[0.0, 0.0, 10.0, 10.0], [4.0, 0.0, 14.0, 10.0], [8.0, 0.0, 18.0, 10.0]])
+    scores = torch.tensor([0.9, 0.8, 0.7])
+    check_equal(nms(boxes, scores, 0.4), torch.tensor([0, 2]))
+
+def test_duplicates_and_empty():
+    """Identical boxes collapse to one; empty input returns an empty tensor"""
+    boxes = torch.tensor([[1.0, 1.0, 3.0, 3.0]] * 4)
+    check_equal(nms(boxes, torch.tensor([0.1, 0.4, 0.3, 0.2]), 0.5), torch.tensor([1]))
+    out = nms(torch.zeros(0, 4), torch.zeros(0), 0.5)
+    check_shape(out, (0,))
+
+def test_single_box():
+    """One box is always kept"""
+    check_equal(nms(torch.tensor([[0.0, 0.0, 1.0, 1.0]]), torch.tensor([0.3]), 0.5), torch.tensor([0]))
+--- hints
+- Sort the indices by score once. Each round keeps the first index and filters the rest by IoU with it.
+- Only boxes that are kept get to suppress others.
+
+=== patchify | Patchify and Unpatchify | Medium
+--- description
+Vision Transformers cut an image into non-overlapping square patches.
+
+Implement `patchify(images, patch)`:
+
+- `images`: `(B, C, H, W)` with `H` and `W` divisible by `patch`
+- returns `(B, N, C * patch * patch)` with `N = (H / patch) * (W / patch)`
+- patches are ordered row by row (left to right, top to bottom); each patch is flattened in `(C, patch, patch)` order
+
+Implement `unpatchify(patches, patch, channels, height, width)` as the exact inverse.
+--- starter
+import torch
+
+
+def patchify(images: torch.Tensor, patch: int) -> torch.Tensor:
+    # TODO
+    pass
+
+
+def unpatchify(patches: torch.Tensor, patch: int, channels: int, height: int, width: int) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def patchify(images: torch.Tensor, patch: int) -> torch.Tensor:
+    b, c, h, w = images.shape
+    gh, gw = h // patch, w // patch
+    x = images.reshape(b, c, gh, patch, gw, patch)
+    x = x.permute(0, 2, 4, 1, 3, 5)
+    return x.reshape(b, gh * gw, c * patch * patch)
+
+
+def unpatchify(patches: torch.Tensor, patch: int, channels: int, height: int, width: int) -> torch.Tensor:
+    b = patches.shape[0]
+    gh, gw = height // patch, width // patch
+    x = patches.reshape(b, gh, gw, channels, patch, patch)
+    x = x.permute(0, 3, 1, 4, 2, 5)
+    return x.reshape(b, channels, height, width)
+--- tests
+def test_small_example():
+    """A 4 x 4 single-channel image cut into 2 x 2 patches"""
+    img = torch.arange(16.0).reshape(1, 1, 4, 4)
+    expected = torch.tensor([[[0.0, 1.0, 4.0, 5.0], [2.0, 3.0, 6.0, 7.0], [8.0, 9.0, 12.0, 13.0], [10.0, 11.0, 14.0, 15.0]]])
+    check_equal(patchify(img, 2), expected)
+
+def test_matches_unfold():
+    """Matches F.unfold for multi-channel, non-square images"""
+    img = torch.randn(2, 3, 8, 12)
+    expected = torch.nn.functional.unfold(img, kernel_size=4, stride=4).transpose(1, 2)
+    out = patchify(img, 4)
+    check_shape(out, (2, 6, 48))
+    check_close(out, expected)
+
+def test_round_trip():
+    """unpatchify inverts patchify"""
+    img = torch.randn(3, 2, 6, 9)
+    check_close(unpatchify(patchify(img, 3), 3, 2, 6, 9), img)
+
+def test_patch_equals_image():
+    """A single patch covering the whole image"""
+    img = torch.randn(1, 3, 5, 5)
+    check_close(patchify(img, 5), img.reshape(1, 1, 75))
+--- hints
+- Reshape to (B, C, H/p, p, W/p, p), then permute so the grid dimensions come first and (C, p, p) last.
+
+=== vit-patch-embedding | ViT Patch Embedding | Medium
+--- description
+Implement the input layer of a Vision Transformer: `PatchEmbedding(img_size, patch, in_channels, dim)`.
+
+Attributes (use these names):
+
+- `self.proj = nn.Conv2d(in_channels, dim, kernel_size=patch, stride=patch)`
+- `self.cls_token`: `nn.Parameter` of shape `(1, 1, dim)`
+- `self.pos_embed`: `nn.Parameter` of shape `(1, num_patches + 1, dim)`
+
+`forward(x)` for `x` of shape `(B, C, img_size, img_size)`:
+
+1. apply `proj` and flatten the spatial grid to a sequence `(B, num_patches, dim)` in row-major order
+2. prepend the class token (expanded to the batch)
+3. add the position embeddings
+
+Return `(B, num_patches + 1, dim)`.
+--- starter
+import torch
+import torch.nn as nn
+
+
+class PatchEmbedding(nn.Module):
+    def __init__(self, img_size: int, patch: int, in_channels: int, dim: int):
+        super().__init__()
+        # TODO
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import torch
+import torch.nn as nn
+
+
+class PatchEmbedding(nn.Module):
+    def __init__(self, img_size: int, patch: int, in_channels: int, dim: int):
+        super().__init__()
+        num_patches = (img_size // patch) ** 2
+        self.proj = nn.Conv2d(in_channels, dim, kernel_size=patch, stride=patch)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
+        self.pos_embed = nn.Parameter(torch.randn(1, num_patches + 1, dim) * 0.02)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        b = x.shape[0]
+        x = self.proj(x).flatten(2).transpose(1, 2)
+        cls = self.cls_token.expand(b, -1, -1)
+        return torch.cat([cls, x], dim=1) + self.pos_embed
+--- tests
+def _randomize(m):
+    with torch.no_grad():
+        m.cls_token.copy_(torch.randn_like(m.cls_token))
+        m.pos_embed.copy_(torch.randn_like(m.pos_embed))
+    return m
+
+def test_shape():
+    """224 x 224 image with 16 x 16 patches gives 197 tokens"""
+    m = PatchEmbedding(224, 16, 3, 32)
+    check_shape(m.pos_embed, (1, 197, 32), "pos_embed")
+    check_shape(m.cls_token, (1, 1, 32), "cls_token")
+    with torch.no_grad():
+        check_shape(m(torch.randn(2, 3, 224, 224)), (2, 197, 32))
+
+def test_class_token_position():
+    """Token 0 is the class token plus its position embedding, for every example"""
+    m = _randomize(PatchEmbedding(8, 4, 3, 6))
+    with torch.no_grad():
+        out = m(torch.randn(3, 3, 8, 8))
+    expected = (m.cls_token + m.pos_embed[:, :1]).detach().expand(3, 1, 6)
+    check_close(out[:, :1], expected)
+
+def test_patch_tokens():
+    """Patch tokens are the projected patches in row-major order plus positions"""
+    m = _randomize(PatchEmbedding(8, 4, 3, 6))
+    x = torch.randn(2, 3, 8, 8)
+    with torch.no_grad():
+        out = m(x)
+        feat = m.proj(x)
+    expected = torch.stack([feat[:, :, 0, 0], feat[:, :, 0, 1], feat[:, :, 1, 0], feat[:, :, 1, 1]], dim=1) + m.pos_embed[:, 1:].detach()
+    check_close(out[:, 1:], expected, tol=1e-5)
+
+def test_parameters_registered():
+    """cls_token and pos_embed are trainable parameters"""
+    names = [n for n, _ in PatchEmbedding(8, 4, 1, 4).named_parameters()]
+    check_true("cls_token" in names and "pos_embed" in names, "cls_token and pos_embed must be nn.Parameters")
+--- hints
+- A conv with kernel = stride = patch embeds each patch; flatten(2).transpose(1, 2) makes it a sequence.
+- Expand the class token to the batch, concatenate it in front, then add pos_embed.
+
+=== depthwise-separable-conv | Depthwise Separable Convolution | Easy
+--- description
+Implement `DepthwiseSeparableConv(in_channels, out_channels, kernel_size, stride=1, padding=0)` as used in MobileNet.
+
+Attributes (use these names, both without bias):
+
+- `self.depthwise`: an `nn.Conv2d` that filters each input channel separately (`groups=in_channels`), keeping the channel count
+- `self.pointwise`: a `1 x 1` `nn.Conv2d` mapping `in_channels` to `out_channels`
+
+`forward(x) = pointwise(depthwise(x))`.
+--- starter
+import torch
+import torch.nn as nn
+
+
+class DepthwiseSeparableConv(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, stride: int = 1, padding: int = 0):
+        super().__init__()
+        # TODO
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import torch
+import torch.nn as nn
+
+
+class DepthwiseSeparableConv(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, stride: int = 1, padding: int = 0):
+        super().__init__()
+        self.depthwise = nn.Conv2d(in_channels, in_channels, kernel_size, stride=stride, padding=padding,
+                                   groups=in_channels, bias=False)
+        self.pointwise = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.pointwise(self.depthwise(x))
+--- tests
+def test_parameter_count():
+    """k*k*C_in + C_in*C_out parameters instead of k*k*C_in*C_out"""
+    m = DepthwiseSeparableConv(32, 64, 3)
+    check_equal(sum(p.numel() for p in m.parameters()), 3 * 3 * 32 + 32 * 64, name="parameter count")
+
+def test_shapes():
+    """Stride and padding apply to the depthwise stage"""
+    m = DepthwiseSeparableConv(8, 16, 3, stride=2, padding=1)
+    with torch.no_grad():
+        check_shape(m(torch.randn(2, 8, 20, 20)), (2, 16, 10, 10))
+    check_shape(m.depthwise.weight, (8, 1, 3, 3), "depthwise weight")
+    check_shape(m.pointwise.weight, (16, 8, 1, 1), "pointwise weight")
+
+def test_channels_filtered_independently():
+    """Before the pointwise stage, each output channel depends on one input channel only"""
+    m = DepthwiseSeparableConv(3, 5, 3, padding=1)
+    x = torch.randn(1, 3, 6, 6)
+    x2 = x.clone()
+    x2[:, 2] += 1.0
+    with torch.no_grad():
+        d1, d2 = m.depthwise(x), m.depthwise(x2)
+    check_close(d1[:, :2], d2[:, :2], name="depthwise output of untouched channels")
+
+def test_forward():
+    """forward is pointwise(depthwise(x))"""
+    m = DepthwiseSeparableConv(4, 6, 3)
+    x = torch.randn(2, 4, 7, 7)
+    with torch.no_grad():
+        ref = torch.nn.functional.conv2d(torch.nn.functional.conv2d(x, m.depthwise.weight, groups=4), m.pointwise.weight)
+        check_close(m(x), ref, tol=1e-5)
+--- hints
+- groups=in_channels makes each filter see a single channel.
+- The pointwise conv has kernel_size=1 and mixes channels.
+
+=== mixup | Mixup | Easy
+--- description
+Implement `mixup(x, y, lam, perm)`.
+
+- `x`: `(B, ...)` inputs, `y`: `(B, C)` one-hot (or soft) labels
+- `lam`: mixing coefficient in `[0, 1]`
+- `perm`: a permutation of `0 .. B-1` (1-D integer tensor) choosing each example's partner
+
+Return `(x_mixed, y_mixed)` with
+
+```
+x_mixed = lam * x + (1 - lam) * x[perm]
+y_mixed = lam * y + (1 - lam) * y[perm]
+```
+--- starter
+import torch
+
+
+def mixup(x: torch.Tensor, y: torch.Tensor, lam: float, perm: torch.Tensor):
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def mixup(x: torch.Tensor, y: torch.Tensor, lam: float, perm: torch.Tensor):
+    return lam * x + (1 - lam) * x[perm], lam * y + (1 - lam) * y[perm]
+--- tests
+def test_basic():
+    """Two examples swapped with lam = 0.75"""
+    x = torch.tensor([[0.0, 0.0], [4.0, 8.0]])
+    y = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+    xm, ym = mixup(x, y, 0.75, torch.tensor([1, 0]))
+    check_close(xm, [[1.0, 2.0], [3.0, 6.0]], name="x")
+    check_close(ym, [[0.75, 0.25], [0.25, 0.75]], name="y")
+
+def test_extremes():
+    """lam = 1 keeps the batch; lam = 0 returns the permuted batch"""
+    x, y = torch.randn(4, 3, 5, 5), torch.eye(4)
+    perm = torch.tensor([2, 0, 3, 1])
+    xm, ym = mixup(x, y, 1.0, perm)
+    check_close(xm, x, name="x at lam=1"); check_close(ym, y, name="y at lam=1")
+    xm, ym = mixup(x, y, 0.0, perm)
+    check_close(xm, x[perm], name="x at lam=0"); check_close(ym, y[perm], name="y at lam=0")
+
+def test_labels_stay_normalized():
+    """Mixed labels still sum to 1 and inputs keep their shape"""
+    x, y = torch.randn(6, 3, 4, 4), torch.nn.functional.one_hot(torch.randint(0, 5, (6,)), 5).float()
+    xm, ym = mixup(x, y, 0.3, torch.randperm(6))
+    check_shape(xm, (6, 3, 4, 4), "x")
+    check_close(ym.sum(dim=1), torch.ones(6), name="label sums")
+--- hints
+- Index with perm to get each example's partner.
+- Apply the same convex combination to inputs and labels.
+
+=== dice-loss | Dice Loss | Medium
+--- description
+Implement the soft Dice loss for binary segmentation.
+
+`dice_loss(logits, targets, smooth=1.0)`:
+
+- `logits`, `targets`: `(B, H, W)`; targets are 0/1 floats
+- `p = sigmoid(logits)`
+- per example: `dice = (2 * sum(p * t) + smooth) / (sum(p) + sum(t) + smooth)`, with sums over all pixels of that example
+- return `1 - mean(dice over the batch)`
+--- starter
+import torch
+
+
+def dice_loss(logits: torch.Tensor, targets: torch.Tensor, smooth: float = 1.0) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def dice_loss(logits: torch.Tensor, targets: torch.Tensor, smooth: float = 1.0) -> torch.Tensor:
+    p = torch.sigmoid(logits).flatten(1)
+    t = targets.flatten(1)
+    inter = (p * t).sum(dim=1)
+    dice = (2 * inter + smooth) / (p.sum(dim=1) + t.sum(dim=1) + smooth)
+    return 1 - dice.mean()
+--- tests
+def test_perfect_prediction():
+    """Confident correct predictions give a loss near 0"""
+    t = (torch.rand(2, 8, 8) > 0.5).float()
+    check_close(dice_loss((t * 2 - 1) * 50, t), 0.0, tol=1e-4)
+
+def test_hand_example():
+    """p = 0.5 everywhere, half the pixels positive"""
+    logits = torch.zeros(1, 2, 2)
+    t = torch.tensor([[[1.0, 1.0], [0.0, 0.0]]])
+    check_close(dice_loss(logits, t, smooth=1.0), 1 - (2 * 1.0 + 1) / (2.0 + 2.0 + 1))
+
+def test_empty_mask():
+    """An empty target with an empty prediction is perfect thanks to smoothing"""
+    check_close(dice_loss(torch.full((1, 4, 4), -50.0), torch.zeros(1, 4, 4)), 0.0, tol=1e-4)
+
+def test_per_example_average():
+    """Dice is computed per example and then averaged"""
+    logits = torch.cat([torch.full((1, 2, 2), 50.0), torch.full((1, 2, 2), -50.0)])
+    t = torch.ones(2, 2, 2)
+    expected = 1 - ((2 * 4 + 1) / (4 + 4 + 1) + (0 + 1) / (0 + 4 + 1)) / 2
+    check_close(dice_loss(logits, t), expected, tol=1e-4)
+
+def test_gradient():
+    """Differentiable with respect to the logits"""
+    logits = torch.randn(2, 5, 5, requires_grad=True)
+    dice_loss(logits, (torch.rand(2, 5, 5) > 0.5).float()).backward()
+    check_true(logits.grad is not None and logits.grad.abs().sum() > 0, "no gradient")
+--- hints
+- Flatten every example to a vector with flatten(1) so the sums are per example.
+- Add the smoothing constant to both numerator and denominator.
+

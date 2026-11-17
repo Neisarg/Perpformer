@@ -1,0 +1,178 @@
+# topic: Evaluation Metrics & Experimentation
+# id: eval
+# subtopics: Precision, recall, F1 and the confusion matrix; ROC AUC and PR AUC; Calibration and log loss; Regression metrics; Ranking metrics (NDCG, MAP, MRR); Class imbalance; A/B testing, power and significance; Offline versus online evaluation
+
+Q: Precision is defined as [E]
+- TP / (TP + FN)
+* TP / (TP + FP)
+- TN / (TN + FP)
+- (TP + TN) / total
+> Precision is the fraction of predicted positives that are correct. TP / (TP + FN) is recall.
+
+Q: A classifier predicts "negative" for every example on a dataset with 1% positives. Its accuracy and recall are [E]
+- 1% and 100%
+* 99% and 0%
+- 50% and 50%
+- 99% and 100%
+> Accuracy is misleading under class imbalance: the model is right 99% of the time yet finds none of the positives.
+
+Q: The F1 score is [E]
+- the arithmetic mean of precision and recall
+* the harmonic mean of precision and recall
+- the product of precision and recall
+- the maximum of precision and recall
+> F1 = 2PR / (P + R). The harmonic mean is dominated by the smaller value, so both must be high.
+
+Q: ROC AUC can be interpreted as [M]
+- the accuracy at the best threshold
+* the probability that a randomly chosen positive is scored higher than a randomly chosen negative
+- the fraction of positives in the top decile
+- the average precision
+> AUC equals the Wilcoxon-Mann-Whitney statistic and depends only on the ranking of scores, not on their calibration.
+
+Q: For a heavily imbalanced problem where positives are rare and of primary interest, which summary is usually more informative than ROC AUC? [M]
+- Accuracy
+* Precision-recall AUC (average precision)
+- Specificity
+- R-squared
+> The false-positive rate in ROC curves is diluted by the huge number of negatives; PR curves focus on the positive class and expose poor precision.
+
+Q: Lowering the decision threshold of a binary classifier generally [E]
+- increases precision and decreases recall
+* increases recall and decreases precision
+- increases both
+- changes neither
+> More examples are predicted positive, so more true positives are found (recall up) at the cost of more false positives (precision typically down).
+
+Q: Which metric depends on the predicted probabilities being well calibrated, not just correctly ranked? [M]
+- ROC AUC
+* Log loss
+- Recall at k
+- Spearman correlation
+> Log loss and Brier score are proper scoring rules sensitive to the actual probability values; AUC is invariant to any monotonic transformation of scores.
+
+Q: A reliability diagram plots [M]
+- loss against training steps
+* observed frequency of positives against predicted probability, per bin
+- true-positive rate against false-positive rate
+- precision against recall
+> A calibrated model lies on the diagonal. Expected calibration error summarizes the gap between confidence and accuracy across bins.
+
+Q: Which regression metric is least sensitive to outliers? [E]
+- Mean squared error
+- Root mean squared error
+* Mean absolute error
+- Maximum error
+> Squared errors grow quadratically with the residual, so a few large errors dominate MSE and RMSE; MAE grows linearly.
+
+Q: NDCG for a ranked list [M]
+- ignores the position of relevant items
+* discounts the gain of each item logarithmically by its rank and normalizes by the ideal ordering
+- requires binary relevance labels
+- is the same as precision at k
+> DCG sums gain / log2(rank + 1); dividing by the DCG of the ideal ranking gives a value in [0, 1] and supports graded relevance.
+
+Q: Mean reciprocal rank (MRR) is based on [E]
+- the number of relevant items in the top k
+* the rank of the first relevant item for each query
+- the average relevance of all items
+- the last relevant item
+> MRR averages 1 / rank of the first relevant result, so it suits tasks with one correct answer such as question answering.
+
+Q: Macro-averaged F1 differs from micro-averaged F1 in that macro averaging [M]
+- pools all predictions before computing the metric
+* computes F1 per class and averages with equal weight per class
+- weights classes by their frequency
+- can only be used for binary problems
+> Macro F1 treats rare and frequent classes equally; micro F1 aggregates counts and is dominated by frequent classes.
+
+Q: In an A/B test, statistical power is the probability of [M]
+- a false positive
+* detecting an effect when a true effect of the assumed size exists
+- the null hypothesis being true
+- the metric being normally distributed
+> Power = 1 - beta. It increases with sample size, effect size and significance level, and decreases with metric variance.
+
+Q: To detect an effect half as large with the same power and significance, the required sample size is roughly [M]
+- the same
+- doubled
+* quadrupled
+- halved
+> Required n scales with 1 / (effect size)^2, so halving the minimum detectable effect needs about four times as many samples.
+
+Q: "Peeking" at an A/B test repeatedly and stopping as soon as p < 0.05 [M]
+- is good practice that saves time
+* inflates the false-positive rate well above 5%
+- reduces statistical power to zero
+- only matters for Bayesian tests
+> Each look is another chance to cross the threshold by chance. Use a fixed horizon, sequential testing or alpha-spending corrections.
+
+Q: Randomizing by user rather than by page view in an online experiment is important because [M]
+- it increases the sample size
+* observations from the same user are correlated and a user should have a consistent experience
+- page views cannot be logged
+- it removes novelty effects
+> The randomization unit should match the unit of analysis and independence; otherwise variance is underestimated and experiences are inconsistent.
+
+Q: A model improves offline AUC but hurts the online business metric. Which is the LEAST plausible explanation? [M]
+- The offline data were logged under a different policy, causing selection bias
+- The offline metric is not aligned with the business objective
+- Training-serving skew in feature computation
+* AUC is mathematically incapable of increasing when a model improves
+> Offline/online gaps commonly come from biased logged data, proxy metrics, skew, latency or feedback loops, not from any property of AUC.
+
+Q: Cohen's kappa is used to [H]
+- measure regression error
+* measure agreement between annotators (or model and labels) corrected for chance agreement
+- compute the area under the ROC curve
+- test normality of residuals
+> kappa = (p_observed - p_expected) / (1 - p_expected). It is common for inter-annotator agreement and imbalanced classification.
+
+Q: Which is the appropriate baseline to compare against when reporting a classifier's accuracy on an imbalanced dataset? [E]
+- 0%
+- 50%
+* The majority-class rate
+- 100%
+> A trivial classifier that always predicts the most frequent class achieves the majority rate, so useful models must beat it.
+
+Q: The Matthews correlation coefficient is valued for binary classification because [H]
+- it ignores true negatives
+* it uses all four confusion-matrix cells and stays informative under class imbalance
+- it is always between 0 and 1
+- it equals accuracy for balanced data in all cases
+> MCC is the correlation between predictions and labels, ranges from -1 to 1 and is high only when the classifier does well on both classes.
+
+Q: A variance-reduction technique such as CUPED in A/B testing works by [H]
+- increasing the traffic allocation
+* adjusting the metric with a pre-experiment covariate correlated with it
+- removing outlier users
+- running the test longer
+> Subtracting theta times a pre-period covariate removes variance explained before treatment, tightening confidence intervals without bias.
+
+Q: BLEU evaluates machine translation by [M]
+- human ratings
+* modified n-gram precision against reference translations, with a brevity penalty
+- recall of reference unigrams only
+- embedding similarity
+> BLEU combines clipped n-gram precisions geometrically and penalizes outputs shorter than the reference. ROUGE is recall-oriented.
+
+Q: Perplexity of a language model on a test set is [M]
+- the number of parameters divided by the number of tokens
+* the exponential of the average negative log-likelihood per token
+- the fraction of tokens predicted correctly
+- the entropy of the vocabulary
+> PPL = exp(cross-entropy). A perplexity of k corresponds to being as uncertain as a uniform choice among k tokens.
+
+Q: When evaluating several model variants on the same test set, a paired test (for example a paired bootstrap or McNemar's test) is preferred because [H]
+- it needs no data
+* it accounts for the fact that both models are evaluated on the same examples, reducing variance
+- it assumes the models are independent
+- it requires larger test sets
+> Per-example errors of two models are strongly correlated; analysing paired differences gives much tighter comparisons than treating results as independent samples.
+
+Q: Simpson's paradox in experiment analysis refers to [H]
+- p-values falling as sample size grows
+* a trend appearing in every subgroup that reverses when the subgroups are combined
+- the winner's curse in metric selection
+- regression to the mean
+> Unequal group sizes across segments can reverse aggregated comparisons; check sample-ratio mismatch and segment mixes.

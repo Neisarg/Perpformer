@@ -221,3 +221,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------------------------------------------------------------- Prepformer
+# Your progress database. It also holds the Claude API key if you save one in Settings.
+user_data/
+*.db
+*.db-journal
+
+# Generated from content/ by build.py; the server and verify.py rebuild it when missing.
+data/
+
+# Local output of verify.py (contains paths from your machine).
+verify_report.json
+
+# macOS and local leftovers.
+.DS_Store
+Claude outputs/
+*.zip

@@ -1,0 +1,178 @@
+# topic: PEFT, Quantization & Efficient Inference
+# id: efficient
+# subtopics: LoRA and its variants (QLoRA, DoRA, rsLoRA, AdaLoRA); Adapters, prefix and prompt tuning; Post-training quantization (GPTQ, AWQ) and QAT; Number formats and mixed precision; Pruning and sparsity; Knowledge distillation; Speculative decoding and batching; KV-cache optimizations (MQA, GQA, MLA); Serving throughput and latency
+
+Q: LoRA fine-tunes a model by [E]
+- updating all weights with a small learning rate
+* freezing the pretrained weights and learning a low-rank update B A added to selected weight matrices
+- adding new Transformer layers on top
+- pruning weights with small magnitude
+> W' = W + (alpha / r) B A with rank r much smaller than the layer dimensions, so only a tiny fraction of parameters is trained.
+
+Q: A weight matrix is 4096 x 4096. A LoRA adapter of rank 8 on it trains how many parameters? [M]
+- 16,777,216
+- 32,768
+* 65,536
+- 8
+> A is 8 x 4096 and B is 4096 x 8: 2 * 8 * 4096 = 65,536, about 0.4% of the 16.8 million in the full matrix.
+
+Q: In standard LoRA initialization, B is set to zero and A is random so that [M]
+- training is faster
+* the adapted model is identical to the pretrained model at the start of fine-tuning
+- the rank is maximized
+- gradients are zero for A forever
+> B A = 0 initially, so fine-tuning starts from the pretrained function. B receives gradients immediately; A starts to move once B is non-zero.
+
+Q: After training, LoRA adds no inference latency because [E]
+- the adapter is discarded
+* the update B A can be merged into the original weight matrix
+- inference skips the adapted layers
+- the rank is reduced to zero
+> W + (alpha/r) B A is computed once and stored, so the forward pass is unchanged. Unmerged adapters allow cheap swapping between tasks instead.
+
+Q: QLoRA makes fine-tuning large models feasible on a single GPU by [M]
+- quantizing the LoRA adapters to 1 bit
+* keeping the frozen base model in 4-bit quantized form and training LoRA adapters in higher precision on top
+- training only the embedding layer
+- removing half of the layers
+> The base weights are stored in 4-bit NF4 with double quantization and dequantized on the fly; gradients flow only into the adapters.
+
+Q: DoRA modifies LoRA by [H]
+- using two adapters per layer in sequence
+* decomposing each weight into magnitude and direction, applying the low-rank update to the direction and learning the magnitude separately
+- dropping the A matrix
+- quantizing the update
+> Weight-decomposed adaptation makes learning behave more like full fine-tuning and usually improves accuracy at the same rank, with no inference cost after merging.
+
+Q: rsLoRA changes the LoRA scaling factor from alpha / r to alpha / sqrt(r) because [H]
+- it reduces memory
+* with alpha / r the update's magnitude shrinks as rank grows, so higher ranks learn poorly; the square-root scaling keeps training stable across ranks
+- it makes B orthogonal
+- it removes the need for a learning rate
+> Rank-stabilized scaling keeps the adapter's output and gradient norms from collapsing at large r, so increasing rank actually helps.
+
+Q: Prompt tuning (soft prompts) trains [M]
+- the full model on prompt-completion pairs
+* a small set of continuous embedding vectors prepended to the input, with the model frozen
+- discrete prompt words chosen by search
+- the output layer only
+> Only the virtual token embeddings are learned. Prefix tuning extends the idea by learning key/value prefixes at every layer.
+
+Q: Post-training quantization (PTQ) differs from quantization-aware training (QAT) in that PTQ [M]
+- simulates quantization during training
+* quantizes an already trained model, usually using a small calibration set and no (or minimal) retraining
+- can only produce 16-bit models
+- always gives better accuracy
+> QAT inserts fake-quantization into training so the weights adapt to rounding, giving better accuracy at low bit-widths but at training cost.
+
+Q: Uniform affine quantization maps a real value x to an integer q by [M]
+- q = floor(x)
+* q = clamp(round(x / scale) + zero_point, q_min, q_max)
+- q = sign(x)
+- q = x * 2^bits
+> Scale sets the step size and zero_point aligns real zero with an integer; dequantization is x approximately equal to scale * (q - zero_point).
+
+Q: The straight-through estimator (STE) is needed in quantization-aware training because [M]
+- rounding is too slow
+* the rounding function has zero gradient almost everywhere, so its gradient is approximated by the identity in the backward pass
+- quantization changes the batch size
+- integers cannot be stored on GPUs
+> Without the STE no gradient would reach the latent full-precision weights.
+
+Q: Per-channel weight quantization usually outperforms per-tensor quantization because [M]
+- it uses more bits
+* different output channels have very different weight ranges, and a separate scale per channel reduces rounding error
+- it avoids calibration
+- it makes inference run in floating point
+> One scale for the whole tensor is dominated by the channel with the largest range, wasting precision on the others.
+
+Q: GPTQ quantizes LLM weights by [H]
+- rounding every weight to the nearest level independently
+* quantizing weights column by column and using approximate second-order (Hessian) information to adjust the remaining weights to compensate for the error
+- training the model from scratch at low precision
+- clustering weights with k-means
+> It solves a layer-wise reconstruction problem on calibration data, building on Optimal Brain Quantization. AWQ instead rescales channels according to activation magnitudes to protect salient weights.
+
+Q: Which component is typically the hardest to quantize to very low precision without accuracy loss? [H]
+- Weights of the middle MLP layers
+* Activations with large outliers (for example in attention and residual streams)
+- The tokenizer
+- The causal mask
+> A few outlier dimensions stretch the range, so a uniform grid wastes its levels. Methods such as SmoothQuant move the difficulty from activations to weights by per-channel rescaling.
+
+Q: Storing a 7-billion-parameter model in 4-bit precision takes about [E]
+- 28 GB
+- 14 GB
+* 3.5 GB
+- 0.7 GB
+> 7e9 parameters * 4 bits = 28e9 bits = 3.5e9 bytes. In fp16 the same model needs about 14 GB.
+
+Q: Unstructured magnitude pruning removes individual small weights. Its main practical drawback is that [M]
+- it cannot reach high sparsity
+* the resulting irregular sparsity gives little speed-up on standard hardware without specialized sparse kernels
+- it changes the model's architecture
+- it requires labels
+> Structured pruning (removing whole heads, channels or layers) yields dense, smaller matrices that run faster on ordinary GPUs but usually costs more accuracy.
+
+Q: In knowledge distillation with temperature T, the soft-target loss is multiplied by T^2 because [H]
+- it makes the loss negative
+* gradients of the softened cross-entropy scale as 1 / T^2, so the factor keeps their magnitude comparable to the hard-label loss
+- it normalizes the logits to unit norm
+- T^2 is the number of classes
+> Without rescaling, raising the temperature would shrink the distillation gradient relative to the supervised term.
+
+Q: Speculative decoding speeds up generation by [M]
+- skipping layers of the large model
+* letting a small draft model propose several tokens that the large model verifies in one parallel forward pass
+- sampling at a lower temperature
+- reducing the vocabulary
+> Accepted tokens are guaranteed to follow the large model's distribution via a rejection-sampling rule; speed-up depends on how often drafts are accepted.
+
+Q: The memory used by the KV cache during generation grows [M]
+- only with the vocabulary size
+* linearly with sequence length, number of layers, number of KV heads and batch size
+- quadratically with the number of layers
+- not at all after the first token
+> Each layer stores keys and values for every past token; for long contexts the cache can exceed the weights' memory, which motivates GQA/MQA and cache quantization.
+
+Q: Multi-head latent attention (MLA), used in DeepSeek models, reduces KV-cache size by [H]
+- deleting old tokens
+* caching a compressed low-rank latent vector per token from which keys and values are reconstructed
+- sharing one head across all layers
+- storing the cache on disk
+> Instead of storing full keys and values for every head, a small latent is cached and projected up when needed, giving far less memory than multi-head attention with similar quality.
+
+Q: Continuous (dynamic) batching in LLM serving [M]
+- waits until a full batch of identical-length prompts arrives
+* adds new requests to the running batch as others finish, at the granularity of individual decoding steps
+- processes one request at a time
+- requires all requests to share a prompt
+> Because requests finish at different times, iteration-level scheduling keeps the GPU full and greatly improves throughput over static batching.
+
+Q: Time to first token (TTFT) is mostly determined by [M]
+- the decoding speed per token
+* queueing plus the prefill pass over the prompt
+- the output length
+- the sampling temperature
+> Prefill processes the whole prompt in parallel; subsequent tokens depend on per-step decode latency. Prompt caching and shorter prompts reduce TTFT.
+
+Q: bitsandbytes' NF4 data type used in QLoRA is designed around the observation that [H]
+- weights are uniformly distributed
+* pretrained weights are approximately normally distributed, so quantization levels are placed at quantiles of a normal distribution
+- weights are binary
+- activations are sparse
+> NormalFloat places more levels where weights are dense (near zero), giving lower error than uniform 4-bit quantization.
+
+Q: Mixed-precision quantization assigns [M]
+- the same bit-width to every layer
+* different bit-widths to different layers or tensors according to their sensitivity
+- higher precision to the least important layers
+- floating point to weights and strings to activations
+> Sensitive components (for example first and last layers, or outlier-heavy activations) keep more bits while robust ones are compressed harder.
+
+Q: Compared with full fine-tuning, a practical advantage of adapters such as LoRA in multi-tenant serving is that [M]
+- they make the base model larger
+* one shared base model can serve many tasks or customers by swapping small adapter weights
+- they remove the need for a tokenizer
+- they double the context window
+> Adapters are megabytes instead of gigabytes, so many can be stored and loaded or batched on top of a single copy of the base weights.

@@ -1,0 +1,801 @@
+# topic: Optimizers & Training Loops
+# id: optim
+# subtopics: SGD with momentum; Adam and AdamW; Learning-rate schedules; Gradient clipping and accumulation; EMA of weights; Mini-batch training loops; Early stopping; Parameter groups
+
+=== sgd-momentum | SGD with Momentum | Medium
+--- description
+Implement an optimizer class `SGD(params, lr, momentum=0.0, weight_decay=0.0)` that follows PyTorch's update rule. `params` is a list of tensors with `requires_grad=True`.
+
+For every parameter `p` with gradient `g = p.grad`:
+
+```
+g   = g + weight_decay * p
+buf = g                        on the first step
+buf = momentum * buf + g       afterwards
+p   = p - lr * buf
+```
+
+Provide `step()` (apply one update in place, skipping parameters whose `.grad` is None) and `zero_grad()` (reset all gradients). Do not use `torch.optim`.
+--- starter
+import torch
+
+
+class SGD:
+    def __init__(self, params, lr: float, momentum: float = 0.0, weight_decay: float = 0.0):
+        self.params = list(params)
+        self.lr = lr
+        self.momentum = momentum
+        self.weight_decay = weight_decay
+        # TODO: state for the momentum buffers
+
+    def zero_grad(self):
+        # TODO
+        pass
+
+    def step(self):
+        # TODO
+        pass
+--- solution
+import torch
+
+
+class SGD:
+    def __init__(self, params, lr: float, momentum: float = 0.0, weight_decay: float = 0.0):
+        self.params = list(params)
+        self.lr = lr
+        self.momentum = momentum
+        self.weight_decay = weight_decay
+        self.buffers = [None] * len(self.params)
+
+    def zero_grad(self):
+        for p in self.params:
+            p.grad = None
+
+    def step(self):
+        with torch.no_grad():
+            for i, p in enumerate(self.params):
+                if p.grad is None:
+                    continue
+                g = p.grad + self.weight_decay * p
+                if self.momentum != 0.0:
+                    if self.buffers[i] is None:
+                        self.buffers[i] = g.clone()
+                    else:
+                        self.buffers[i] = self.momentum * self.buffers[i] + g
+                    g = self.buffers[i]
+                p.sub_(self.lr * g)
+--- tests
+def _run(make_mine, make_ref, steps=6):
+    torch.manual_seed(1)
+    a = torch.randn(4, 3, requires_grad=True)
+    b = torch.randn(3, requires_grad=True)
+    a2, b2 = a.detach().clone().requires_grad_(True), b.detach().clone().requires_grad_(True)
+    mine, ref = make_mine([a, b]), make_ref([a2, b2])
+    target = torch.randn(4, 3)
+    for _ in range(steps):
+        for opt, (p, q) in ((mine, (a, b)), (ref, (a2, b2))):
+            opt.zero_grad()
+            loss = ((p * q - target) ** 2).sum() + (p ** 3).mean()
+            loss.backward()
+            opt.step()
+    return (a, b), (a2, b2)
+
+def test_plain_sgd():
+    """Without momentum, matches torch.optim.SGD"""
+    (a, b), (a2, b2) = _run(lambda p: SGD(p, lr=0.01), lambda p: torch.optim.SGD(p, lr=0.01))
+    check_close(a, a2, tol=1e-5); check_close(b, b2, tol=1e-5)
+
+def test_momentum():
+    """With momentum 0.9, matches torch.optim.SGD"""
+    (a, b), (a2, b2) = _run(lambda p: SGD(p, lr=0.005, momentum=0.9), lambda p: torch.optim.SGD(p, lr=0.005, momentum=0.9))
+    check_close(a, a2, tol=1e-5); check_close(b, b2, tol=1e-5)
+
+def test_weight_decay():
+    """With momentum and weight decay, matches torch.optim.SGD"""
+    (a, b), (a2, b2) = _run(lambda p: SGD(p, lr=0.005, momentum=0.8, weight_decay=0.1),
+                            lambda p: torch.optim.SGD(p, lr=0.005, momentum=0.8, weight_decay=0.1))
+    check_close(a, a2, tol=1e-5); check_close(b, b2, tol=1e-5)
+
+def test_zero_grad():
+    """zero_grad clears gradients so they do not accumulate"""
+    p = torch.ones(3, requires_grad=True)
+    opt = SGD([p], lr=0.1)
+    (p * 2).sum().backward()
+    opt.zero_grad()
+    check_true(p.grad is None or float(p.grad.abs().sum()) == 0.0, "gradients were not cleared")
+--- hints
+- Update the parameters inside torch.no_grad() with in-place operations so the leaf tensors stay the same objects.
+- Keep one momentum buffer per parameter; the first step initializes it with the gradient.
+
+=== adam | Adam Optimizer | Medium
+--- description
+Implement `Adam(params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8)` with `step()` and `zero_grad()`, matching `torch.optim.Adam`.
+
+For each parameter with gradient `g`, at step `t = 1, 2, ...`:
+
+```
+m = beta1 * m + (1 - beta1) * g
+v = beta2 * v + (1 - beta2) * g ** 2
+m_hat = m / (1 - beta1 ** t)
+v_hat = v / (1 - beta2 ** t)
+p = p - lr * m_hat / (sqrt(v_hat) + eps)
+```
+
+`m` and `v` start at zero. Do not use `torch.optim`.
+--- starter
+import torch
+
+
+class Adam:
+    def __init__(self, params, lr: float = 1e-3, betas=(0.9, 0.999), eps: float = 1e-8):
+        self.params = list(params)
+        self.lr = lr
+        self.beta1, self.beta2 = betas
+        self.eps = eps
+        # TODO: state
+
+    def zero_grad(self):
+        # TODO
+        pass
+
+    def step(self):
+        # TODO
+        pass
+--- solution
+import torch
+
+
+class Adam:
+    def __init__(self, params, lr: float = 1e-3, betas=(0.9, 0.999), eps: float = 1e-8):
+        self.params = list(params)
+        self.lr = lr
+        self.beta1, self.beta2 = betas
+        self.eps = eps
+        self.m = [torch.zeros_like(p) for p in self.params]
+        self.v = [torch.zeros_like(p) for p in self.params]
+        self.t = 0
+
+    def zero_grad(self):
+        for p in self.params:
+            p.grad = None
+
+    def step(self):
+        self.t += 1
+        with torch.no_grad():
+            for i, p in enumerate(self.params):
+                if p.grad is None:
+                    continue
+                g = p.grad
+                self.m[i] = self.beta1 * self.m[i] + (1 - self.beta1) * g
+                self.v[i] = self.beta2 * self.v[i] + (1 - self.beta2) * g * g
+                m_hat = self.m[i] / (1 - self.beta1 ** self.t)
+                v_hat = self.v[i] / (1 - self.beta2 ** self.t)
+                p.sub_(self.lr * m_hat / (v_hat.sqrt() + self.eps))
+--- tests
+def _run(make_mine, make_ref, steps=8):
+    torch.manual_seed(2)
+    a = torch.randn(5, 2, dtype=torch.float64, requires_grad=True)
+    a2 = a.detach().clone().requires_grad_(True)
+    mine, ref = make_mine([a]), make_ref([a2])
+    target = torch.randn(5, 2, dtype=torch.float64)
+    for _ in range(steps):
+        for opt, p in ((mine, a), (ref, a2)):
+            opt.zero_grad()
+            ((p - target) ** 2).sum().add((p ** 4).sum()).backward()
+            opt.step()
+    return a, a2
+
+def test_first_step_size():
+    """The first step moves every coordinate by about lr, whatever the gradient scale"""
+    p = torch.tensor([1.0, -2.0, 3.0], requires_grad=True)
+    opt = Adam([p], lr=0.1)
+    (p * torch.tensor([1000.0, -0.001, 5.0])).sum().backward()
+    opt.step()
+    check_close(p, [0.9, -1.9, 2.9], tol=1e-3)
+
+def test_matches_torch_default():
+    """Matches torch.optim.Adam with default betas"""
+    a, a2 = _run(lambda p: Adam(p, lr=0.01), lambda p: torch.optim.Adam(p, lr=0.01))
+    check_close(a, a2, tol=1e-9)
+
+def test_matches_torch_custom():
+    """Matches torch.optim.Adam with custom betas and eps"""
+    a, a2 = _run(lambda p: Adam(p, lr=0.05, betas=(0.8, 0.95), eps=1e-6),
+                 lambda p: torch.optim.Adam(p, lr=0.05, betas=(0.8, 0.95), eps=1e-6))
+    check_close(a, a2, tol=1e-9)
+--- hints
+- Keep a step counter t for the bias correction, shared by all parameters.
+
+=== adamw-step | AdamW Update (Functional) | Medium
+--- description
+Implement a single AdamW update as a pure function:
+
+```
+adamw_step(param, grad, m, v, t, lr, beta1, beta2, eps, weight_decay) -> (new_param, new_m, new_v)
+```
+
+AdamW applies weight decay directly to the weights, decoupled from the adaptive step:
+
+```
+param = param - lr * weight_decay * param          # decay first
+m = beta1 * m + (1 - beta1) * grad
+v = beta2 * v + (1 - beta2) * grad ** 2
+m_hat = m / (1 - beta1 ** t);  v_hat = v / (1 - beta2 ** t)
+param = param - lr * m_hat / (sqrt(v_hat) + eps)
+```
+
+`t` is the 1-based step number. Return new tensors; do not modify the inputs in place.
+--- starter
+import torch
+
+
+def adamw_step(param, grad, m, v, t, lr=1e-3, beta1=0.9, beta2=0.999, eps=1e-8, weight_decay=0.01):
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def adamw_step(param, grad, m, v, t, lr=1e-3, beta1=0.9, beta2=0.999, eps=1e-8, weight_decay=0.01):
+    param = param - lr * weight_decay * param
+    m = beta1 * m + (1 - beta1) * grad
+    v = beta2 * v + (1 - beta2) * grad ** 2
+    m_hat = m / (1 - beta1 ** t)
+    v_hat = v / (1 - beta2 ** t)
+    param = param - lr * m_hat / (v_hat.sqrt() + eps)
+    return param, m, v
+--- tests
+def test_matches_torch():
+    """Several steps match torch.optim.AdamW"""
+    p_ref = torch.randn(6, dtype=torch.float64, requires_grad=True)
+    opt = torch.optim.AdamW([p_ref], lr=0.02, betas=(0.9, 0.99), eps=1e-8, weight_decay=0.1)
+    p = p_ref.detach().clone()
+    m, v = torch.zeros_like(p), torch.zeros_like(p)
+    target = torch.randn(6, dtype=torch.float64)
+    for t in range(1, 8):
+        opt.zero_grad()
+        ((p_ref - target) ** 2).sum().backward()
+        grad = 2 * (p - target)
+        opt.step()
+        p, m, v = adamw_step(p, grad, m, v, t, lr=0.02, beta1=0.9, beta2=0.99, eps=1e-8, weight_decay=0.1)
+    check_close(p, p_ref, tol=1e-9)
+
+def test_decay_only():
+    """With a zero gradient only the decoupled decay acts"""
+    p = torch.tensor([2.0, -4.0])
+    new_p, m, v = adamw_step(p, torch.zeros(2), torch.zeros(2), torch.zeros(2), 1, lr=0.1, weight_decay=0.5)
+    check_close(new_p, [1.9, -3.8])
+    check_close(m, torch.zeros(2), name="m")
+
+def test_inputs_not_modified():
+    """Inputs are left untouched"""
+    p, g, m, v = torch.ones(3), torch.ones(3), torch.zeros(3), torch.zeros(3)
+    adamw_step(p, g, m, v, 1)
+    check_equal(p, torch.ones(3), name="param")
+    check_equal(m, torch.zeros(3), name="m")
+    check_equal(v, torch.zeros(3), name="v")
+--- hints
+- Apply the decay to the weights first, as param * (1 - lr * weight_decay).
+- The rest is a standard Adam step with bias correction using t.
+
+=== cosine-schedule | Cosine Schedule with Linear Warmup | Easy
+--- description
+Implement `lr_at_step(step, warmup_steps, total_steps, base_lr, min_lr)` returning the learning rate (a Python float) for a 0-based `step`:
+
+- **warmup** (`step < warmup_steps`): `base_lr * step / warmup_steps`
+- **cosine decay** (`warmup_steps <= step < total_steps`):
+
+```
+progress = (step - warmup_steps) / (total_steps - warmup_steps)
+lr = min_lr + 0.5 * (base_lr - min_lr) * (1 + cos(pi * progress))
+```
+
+- **after the end** (`step >= total_steps`): `min_lr`
+--- starter
+import math
+
+
+def lr_at_step(step: int, warmup_steps: int, total_steps: int, base_lr: float, min_lr: float = 0.0) -> float:
+    # TODO
+    pass
+--- solution
+import math
+
+
+def lr_at_step(step: int, warmup_steps: int, total_steps: int, base_lr: float, min_lr: float = 0.0) -> float:
+    if step < warmup_steps:
+        return base_lr * step / warmup_steps
+    if step >= total_steps:
+        return min_lr
+    progress = (step - warmup_steps) / (total_steps - warmup_steps)
+    return min_lr + 0.5 * (base_lr - min_lr) * (1.0 + math.cos(math.pi * progress))
+--- tests
+def test_warmup():
+    """Linear warmup from 0"""
+    check_close(lr_at_step(0, 10, 100, 1.0), 0.0)
+    check_close(lr_at_step(5, 10, 100, 1.0), 0.5)
+    check_close(lr_at_step(9, 10, 100, 2.0), 1.8)
+
+def test_peak_and_midpoint():
+    """Peak right after warmup, halfway value at the midpoint of the decay"""
+    check_close(lr_at_step(10, 10, 110, 1.0, 0.1), 1.0)
+    check_close(lr_at_step(60, 10, 110, 1.0, 0.1), 0.55)
+    check_close(lr_at_step(35, 10, 110, 1.0, 0.0), 0.5 * (1 + math.cos(math.pi * 0.25)))
+
+def test_end():
+    """min_lr at and after total_steps"""
+    check_close(lr_at_step(110, 10, 110, 1.0, 0.1), 0.1)
+    check_close(lr_at_step(5000, 10, 110, 1.0, 0.1), 0.1)
+
+def test_no_warmup():
+    """warmup_steps = 0 starts at base_lr"""
+    check_close(lr_at_step(0, 0, 50, 3.0), 3.0)
+--- hints
+- Handle three regimes in order: warmup, after the end, cosine decay.
+- progress goes from 0 to 1 over the decay phase; the cosine term goes from 1 to -1.
+
+=== grad-clipping | Gradient Clipping by Global Norm | Easy
+--- description
+Implement `clip_grad_norm(params, max_norm)` like `torch.nn.utils.clip_grad_norm_`.
+
+1. Compute the global L2 norm of all gradients together: `sqrt(sum over parameters of sum(grad ** 2))`.
+2. If it exceeds `max_norm`, multiply every gradient in place by `max_norm / total_norm`.
+3. Return the total norm measured before clipping, as a Python float.
+
+Parameters whose `.grad` is None are skipped.
+--- starter
+import torch
+
+
+def clip_grad_norm(params, max_norm: float) -> float:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def clip_grad_norm(params, max_norm: float) -> float:
+    params = [p for p in params if p.grad is not None]
+    total = torch.sqrt(sum((p.grad.detach() ** 2).sum() for p in params)).item()
+    if total > max_norm:
+        scale = max_norm / total
+        for p in params:
+            p.grad.detach().mul_(scale)
+    return total
+--- tests
+def _params():
+    a = torch.zeros(2, requires_grad=True)
+    b = torch.zeros(2, 2, requires_grad=True)
+    a.grad = torch.tensor([3.0, 0.0])
+    b.grad = torch.tensor([[0.0, 4.0], [0.0, 0.0]])
+    return a, b
+
+def test_clips():
+    """Norm 5 clipped to 1"""
+    a, b = _params()
+    total = clip_grad_norm([a, b], 1.0)
+    check_close(total, 5.0, name="returned norm")
+    check_close(a.grad, [0.6, 0.0], name="a.grad")
+    check_close(b.grad, [[0.0, 0.8], [0.0, 0.0]], name="b.grad")
+
+def test_no_clip_needed():
+    """Gradients below the threshold are unchanged"""
+    a, b = _params()
+    total = clip_grad_norm([a, b], 10.0)
+    check_close(total, 5.0, name="returned norm")
+    check_close(a.grad, [3.0, 0.0], name="a.grad")
+
+def test_matches_torch():
+    """Matches torch.nn.utils.clip_grad_norm_ on a model"""
+    model = torch.nn.Sequential(torch.nn.Linear(4, 8), torch.nn.Tanh(), torch.nn.Linear(8, 1))
+    (model(torch.randn(16, 4)) * 50).pow(2).sum().backward()
+    grads = [p.grad.clone() for p in model.parameters()]
+    ref_total = torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+    ref = [p.grad.clone() for p in model.parameters()]
+    for p, g in zip(model.parameters(), grads):
+        p.grad = g.clone()
+    total = clip_grad_norm(list(model.parameters()), 0.5)
+    check_close(total, ref_total, tol=1e-3, name="returned norm")
+    for p, r in zip(model.parameters(), ref):
+        check_close(p.grad, r, tol=1e-4, name="clipped gradient")
+
+def test_skips_none():
+    """Parameters without gradients are ignored"""
+    a, _ = _params()
+    c = torch.zeros(3, requires_grad=True)
+    check_close(clip_grad_norm([a, c], 1.0), 3.0, name="returned norm")
+--- hints
+- Sum the squared gradients of all parameters before taking one square root.
+- Scale every gradient in place by max_norm / total_norm only when the norm is too large.
+
+=== ema-weights | Exponential Moving Average of Weights | Medium
+--- description
+Implement `EMA(model, decay)` that maintains a smoothed copy of a model's parameters.
+
+- `__init__`: store a detached clone of every parameter in `self.shadow`, a dict from parameter name to tensor
+- `update(model)`: for every parameter, `shadow = decay * shadow + (1 - decay) * param`
+- `copy_to(model)`: overwrite the model's parameters with the shadow values (in place)
+
+The shadow tensors must not require gradients and must not share memory with the model's parameters.
+--- starter
+import torch
+import torch.nn as nn
+
+
+class EMA:
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {}
+        # TODO
+
+    def update(self, model: nn.Module):
+        # TODO
+        pass
+
+    def copy_to(self, model: nn.Module):
+        # TODO
+        pass
+--- solution
+import torch
+import torch.nn as nn
+
+
+class EMA:
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {name: p.detach().clone() for name, p in model.named_parameters()}
+
+    def update(self, model: nn.Module):
+        with torch.no_grad():
+            for name, p in model.named_parameters():
+                self.shadow[name].mul_(self.decay).add_(p.detach(), alpha=1 - self.decay)
+
+    def copy_to(self, model: nn.Module):
+        with torch.no_grad():
+            for name, p in model.named_parameters():
+                p.copy_(self.shadow[name])
+--- tests
+def test_init_copies():
+    """The shadow starts equal to the weights but is an independent copy"""
+    model = torch.nn.Linear(3, 2)
+    ema = EMA(model, 0.9)
+    check_equal(sorted(ema.shadow.keys()), ["bias", "weight"], name="shadow keys")
+    check_close(ema.shadow["weight"], model.weight)
+    with torch.no_grad():
+        model.weight.add_(1.0)
+    check_true(not torch.allclose(ema.shadow["weight"], model.weight), "shadow shares memory with the model")
+    check_true(not ema.shadow["weight"].requires_grad, "shadow tensors must not require grad")
+
+def test_update():
+    """Two updates follow the EMA recursion"""
+    model = torch.nn.Linear(2, 1)
+    w0 = model.weight.detach().clone()
+    ema = EMA(model, 0.9)
+    with torch.no_grad():
+        model.weight.fill_(1.0)
+    ema.update(model)
+    check_close(ema.shadow["weight"], 0.9 * w0 + 0.1 * torch.ones_like(w0), name="after one update")
+    with torch.no_grad():
+        model.weight.fill_(3.0)
+    ema.update(model)
+    check_close(ema.shadow["weight"], 0.9 * (0.9 * w0 + 0.1) + 0.3, name="after two updates")
+
+def test_copy_to():
+    """copy_to writes the shadow into the model"""
+    model = torch.nn.Linear(4, 4)
+    ema = EMA(model, 0.5)
+    saved = {k: v.clone() for k, v in ema.shadow.items()}
+    with torch.no_grad():
+        for p in model.parameters():
+            p.zero_()
+    ema.copy_to(model)
+    check_close(model.weight, saved["weight"], name="weight")
+    check_close(model.bias, saved["bias"], name="bias")
+--- hints
+- Store detached clones keyed by parameter name.
+- Update in place under torch.no_grad(): shadow.mul_(decay).add_(param, alpha=1 - decay).
+
+=== training-loop | Mini-Batch Training Loop | Medium
+--- description
+Implement `train(model, X, y, epochs, lr, batch_size)`.
+
+For every epoch, iterate over the data in order (no shuffling) in consecutive mini-batches of `batch_size` (the last batch may be smaller). For each batch:
+
+1. zero the gradients
+2. compute `F.mse_loss(model(xb), yb)`
+3. backpropagate
+4. take a step with `torch.optim.SGD(model.parameters(), lr=lr)` (create the optimizer once)
+
+Return a list with one float per epoch: the mean of that epoch's batch losses.
+--- starter
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+def train(model: nn.Module, X: torch.Tensor, y: torch.Tensor, epochs: int, lr: float, batch_size: int):
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+def train(model: nn.Module, X: torch.Tensor, y: torch.Tensor, epochs: int, lr: float, batch_size: int):
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    history = []
+    model.train()
+    for _ in range(epochs):
+        losses = []
+        for start in range(0, X.shape[0], batch_size):
+            xb, yb = X[start:start + batch_size], y[start:start + batch_size]
+            optimizer.zero_grad()
+            loss = F.mse_loss(model(xb), yb)
+            loss.backward()
+            optimizer.step()
+            losses.append(loss.item())
+        history.append(sum(losses) / len(losses))
+    return history
+--- tests
+import copy
+
+def _problem():
+    X = torch.randn(50, 3)
+    y = X @ torch.tensor([[1.0], [-2.0], [0.5]]) + 0.3
+    return torch.nn.Linear(3, 1), X, y
+
+def _reference(model, X, y, epochs, lr, bs):
+    opt = torch.optim.SGD(model.parameters(), lr=lr)
+    hist = []
+    for _ in range(epochs):
+        losses = []
+        for s in range(0, X.shape[0], bs):
+            opt.zero_grad()
+            loss = torch.nn.functional.mse_loss(model(X[s:s + bs]), y[s:s + bs])
+            loss.backward()
+            opt.step()
+            losses.append(loss.item())
+        hist.append(sum(losses) / len(losses))
+    return hist
+
+def test_loss_decreases():
+    """The loss goes down and the model fits a linear problem"""
+    model, X, y = _problem()
+    hist = train(model, X, y, epochs=40, lr=0.1, batch_size=16)
+    check_equal(len(hist), 40, name="number of epoch losses")
+    check_true(hist[-1] < 0.01 * hist[0], "final loss %.5f did not fall far below the initial %.5f" % (hist[-1], hist[0]))
+
+def test_matches_reference():
+    """Weights and losses match a reference loop exactly (ordered batches, last one smaller)"""
+    model, X, y = _problem()
+    ref_model = copy.deepcopy(model)
+    hist = train(model, X, y, epochs=3, lr=0.05, batch_size=16)
+    ref_hist = _reference(ref_model, X, y, 3, 0.05, 16)
+    check_close(model.weight, ref_model.weight, tol=1e-5, name="weight")
+    check_close(model.bias, ref_model.bias, tol=1e-5, name="bias")
+    check_close(hist, ref_hist, tol=1e-5, name="epoch losses")
+
+def test_full_batch():
+    """batch_size >= N performs one step per epoch"""
+    model, X, y = _problem()
+    ref_model = copy.deepcopy(model)
+    train(model, X, y, epochs=2, lr=0.1, batch_size=1000)
+    _reference(ref_model, X, y, 2, 0.1, 1000)
+    check_close(model.weight, ref_model.weight, tol=1e-5, name="weight")
+--- hints
+- Create the optimizer once, outside the loops.
+- Slice batches with X[start:start + batch_size]; the last slice is automatically shorter.
+
+=== grad-accumulation | Gradient Accumulation | Medium
+--- description
+A large batch does not fit in memory, so it is processed as `k` equally sized micro-batches.
+
+Implement `accumulate_gradients(model, loss_fn, micro_batches)` where `micro_batches` is a list of `(x, y)` pairs and `loss_fn(pred, y)` returns a mean-reduced loss.
+
+After the call, each parameter's `.grad` must equal the gradient of the loss on the whole batch (all micro-batches concatenated). Start by clearing existing gradients. Return the average of the micro-batch losses as a float.
+
+Do not concatenate the micro-batches: run one forward and backward pass per micro-batch.
+--- starter
+import torch
+import torch.nn as nn
+
+
+def accumulate_gradients(model: nn.Module, loss_fn, micro_batches) -> float:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn as nn
+
+
+def accumulate_gradients(model: nn.Module, loss_fn, micro_batches) -> float:
+    model.zero_grad()
+    k = len(micro_batches)
+    total = 0.0
+    for x, y in micro_batches:
+        loss = loss_fn(model(x), y) / k
+        loss.backward()
+        total += loss.item()
+    return total
+--- tests
+def _setup():
+    model = torch.nn.Sequential(torch.nn.Linear(5, 8), torch.nn.ReLU(), torch.nn.Linear(8, 2))
+    X, y = torch.randn(24, 5), torch.randn(24, 2)
+    return model, X, y
+
+def test_matches_big_batch():
+    """Accumulated gradients equal the full-batch gradient"""
+    model, X, y = _setup()
+    loss_fn = torch.nn.functional.mse_loss
+    model.zero_grad()
+    full = loss_fn(model(X), y)
+    full.backward()
+    expected = [p.grad.clone() for p in model.parameters()]
+    batches = [(X[i:i + 6], y[i:i + 6]) for i in range(0, 24, 6)]
+    avg = accumulate_gradients(model, loss_fn, batches)
+    check_close(avg, full.item(), tol=1e-5, name="returned loss")
+    for p, e in zip(model.parameters(), expected):
+        check_close(p.grad, e, tol=1e-5, name="accumulated gradient")
+
+def test_clears_stale_gradients():
+    """Gradients left over from before the call are discarded"""
+    model, X, y = _setup()
+    loss_fn = torch.nn.functional.mse_loss
+    (model(X) * 100).sum().backward()
+    batches = [(X[:12], y[:12]), (X[12:], y[12:])]
+    accumulate_gradients(model, loss_fn, batches)
+    model2_grads = [p.grad.clone() for p in model.parameters()]
+    model.zero_grad()
+    loss_fn(model(X), y).backward()
+    for g, p in zip(model2_grads, model.parameters()):
+        check_close(g, p.grad, tol=1e-5, name="gradient")
+
+def test_single_micro_batch():
+    """One micro-batch is an ordinary backward pass"""
+    model, X, y = _setup()
+    loss_fn = torch.nn.functional.mse_loss
+    avg = accumulate_gradients(model, loss_fn, [(X, y)])
+    got = [p.grad.clone() for p in model.parameters()]
+    model.zero_grad()
+    full = loss_fn(model(X), y)
+    full.backward()
+    check_close(avg, full.item(), tol=1e-5, name="returned loss")
+    for g, p in zip(got, model.parameters()):
+        check_close(g, p.grad, tol=1e-5, name="gradient")
+--- hints
+- backward() adds to .grad. Dividing each micro-batch loss by k makes the sum equal the mean over the whole batch.
+
+=== early-stopping | Early Stopping | Easy
+--- description
+Implement `EarlyStopping(patience, min_delta=0.0)`.
+
+Call `step(val_loss)` once per epoch. It returns `True` when training should stop.
+
+- A loss counts as an improvement when `val_loss < best - min_delta`. An improvement updates `self.best`, records the epoch in `self.best_epoch` (0-based count of `step` calls) and resets the counter.
+- Otherwise the counter of bad epochs increases by one.
+- `step` returns `True` once the counter reaches `patience`.
+
+Before any call, `self.best` is `float("inf")`.
+--- starter
+class EarlyStopping:
+    def __init__(self, patience: int, min_delta: float = 0.0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best = float("inf")
+        self.best_epoch = -1
+        # TODO
+
+    def step(self, val_loss: float) -> bool:
+        # TODO
+        pass
+--- solution
+class EarlyStopping:
+    def __init__(self, patience: int, min_delta: float = 0.0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best = float("inf")
+        self.best_epoch = -1
+        self.bad_epochs = 0
+        self.epoch = -1
+
+    def step(self, val_loss: float) -> bool:
+        self.epoch += 1
+        if val_loss < self.best - self.min_delta:
+            self.best = val_loss
+            self.best_epoch = self.epoch
+            self.bad_epochs = 0
+        else:
+            self.bad_epochs += 1
+        return self.bad_epochs >= self.patience
+--- tests
+def test_stops_after_patience():
+    """Stops after `patience` epochs without improvement"""
+    es = EarlyStopping(patience=2)
+    results = [es.step(v) for v in [1.0, 0.8, 0.9, 0.85]]
+    check_equal(results, [False, False, False, True], name="step results")
+    check_close(es.best, 0.8, name="best")
+    check_equal(es.best_epoch, 1, name="best_epoch")
+
+def test_counter_resets():
+    """An improvement resets the counter"""
+    es = EarlyStopping(patience=2)
+    results = [es.step(v) for v in [1.0, 1.1, 0.9, 1.0, 0.95, 0.5, 0.6]]
+    check_equal(results, [False, False, False, False, True, False, False], name="step results")
+    check_equal(es.best_epoch, 5, name="best_epoch")
+
+def test_min_delta():
+    """Improvements smaller than min_delta do not count"""
+    es = EarlyStopping(patience=2, min_delta=0.1)
+    results = [es.step(v) for v in [1.0, 0.95, 0.92]]
+    check_equal(results, [False, False, True], name="step results")
+    check_close(es.best, 1.0, name="best")
+--- hints
+- Track the best loss, the epoch it occurred and a counter of bad epochs.
+- Compare with best - min_delta, and return counter >= patience.
+
+=== param-groups | Weight-Decay Parameter Groups | Easy
+--- description
+Weight decay is normally applied to weight matrices but not to biases or normalization parameters.
+
+Implement `param_groups(model, weight_decay)` returning a list of two dicts suitable for `torch.optim.AdamW`:
+
+```
+[
+  {"params": [...parameters with 2 or more dimensions...], "weight_decay": weight_decay},
+  {"params": [...parameters with fewer than 2 dimensions...], "weight_decay": 0.0},
+]
+```
+
+Only include parameters with `requires_grad=True`, each exactly once, in `model.parameters()` order.
+--- starter
+import torch
+import torch.nn as nn
+
+
+def param_groups(model: nn.Module, weight_decay: float):
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn as nn
+
+
+def param_groups(model: nn.Module, weight_decay: float):
+    decay = [p for p in model.parameters() if p.requires_grad and p.dim() >= 2]
+    no_decay = [p for p in model.parameters() if p.requires_grad and p.dim() < 2]
+    return [
+        {"params": decay, "weight_decay": weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    ]
+--- tests
+def _model():
+    return torch.nn.Sequential(torch.nn.Embedding(10, 8), torch.nn.Linear(8, 16), torch.nn.LayerNorm(16), torch.nn.Linear(16, 4))
+
+def test_split():
+    """Matrices decay; biases and LayerNorm parameters do not"""
+    groups = param_groups(_model(), 0.1)
+    check_equal(len(groups), 2, name="number of groups")
+    check_close(groups[0]["weight_decay"], 0.1, name="decay group weight_decay")
+    check_close(groups[1]["weight_decay"], 0.0, name="no-decay group weight_decay")
+    check_equal(sorted(tuple(p.shape) for p in groups[0]["params"]), [(4, 16), (10, 8), (16, 8)], name="decay shapes")
+    check_equal(sorted(tuple(p.shape) for p in groups[1]["params"]), [(4,), (16,), (16,), (16,)], name="no-decay shapes")
+
+def test_frozen_excluded():
+    """Frozen parameters are left out"""
+    model = _model()
+    for p in model[1].parameters():
+        p.requires_grad_(False)
+    groups = param_groups(model, 0.1)
+    total = sum(p.numel() for g in groups for p in g["params"])
+    expected = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    check_equal(total, expected, name="number of trainable values in the groups")
+
+def test_usable_by_optimizer():
+    """The groups can be passed to AdamW"""
+    opt = torch.optim.AdamW(param_groups(_model(), 0.05), lr=1e-3)
+    check_equal([g["weight_decay"] for g in opt.param_groups], [0.05, 0.0], name="optimizer weight decays")
+--- hints
+- p.dim() >= 2 identifies weight matrices and embeddings.
+- Skip parameters with requires_grad=False.
+

@@ -1,0 +1,912 @@
+# topic: Neural Network Layers from Scratch
+# id: layers
+# subtopics: Linear and embedding layers; Activations and initialization; Dropout; Batch, layer, group and RMS normalization; Convolution and pooling; Residual blocks; LSTM and GRU cells
+
+=== linear-layer | Linear Layer | Easy
+--- description
+Implement a fully connected layer as an `nn.Module` without using `nn.Linear` or `F.linear`.
+
+`Linear(in_features, out_features, bias=True)` must have
+
+- `self.weight`: an `nn.Parameter` of shape `(out_features, in_features)`
+- `self.bias`: an `nn.Parameter` of shape `(out_features,)`, or `None` when `bias=False`
+- both initialized uniformly in `[-1/sqrt(in_features), 1/sqrt(in_features)]`
+- `forward(x)` computing `x @ weight.T + bias` for inputs of shape `(..., in_features)`
+--- starter
+import math
+import torch
+import torch.nn as nn
+
+
+class Linear(nn.Module):
+    def __init__(self, in_features: int, out_features: int, bias: bool = True):
+        super().__init__()
+        # TODO: create self.weight and self.bias
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import math
+import torch
+import torch.nn as nn
+
+
+class Linear(nn.Module):
+    def __init__(self, in_features: int, out_features: int, bias: bool = True):
+        super().__init__()
+        bound = 1.0 / math.sqrt(in_features)
+        self.weight = nn.Parameter(torch.empty(out_features, in_features).uniform_(-bound, bound))
+        self.bias = nn.Parameter(torch.empty(out_features).uniform_(-bound, bound)) if bias else None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = x @ self.weight.T
+        if self.bias is not None:
+            out = out + self.bias
+        return out
+--- tests
+def test_matches_nn_linear():
+    """Same output as nn.Linear with the same weights"""
+    layer, ref = Linear(5, 3), torch.nn.Linear(5, 3)
+    with torch.no_grad():
+        ref.weight.copy_(layer.weight)
+        ref.bias.copy_(layer.bias)
+    x = torch.randn(4, 7, 5)
+    check_close(layer(x), ref(x))
+
+def test_parameters():
+    """Registers weight and bias as parameters with the right shapes"""
+    layer = Linear(8, 2)
+    check_shape(layer.weight, (2, 8), "weight")
+    check_shape(layer.bias, (2,), "bias")
+    check_equal(sum(p.numel() for p in layer.parameters()), 18, name="parameter count")
+
+def test_init_range():
+    """Initial values lie within the uniform bound and are not constant"""
+    layer = Linear(100, 50)
+    bound = 0.1
+    check_true(layer.weight.abs().max() <= bound + 1e-6, "weight outside [-1/sqrt(in), 1/sqrt(in)]")
+    check_true(layer.weight.std() > 0.03, "weights look constant or far too small")
+
+def test_no_bias():
+    """bias=False gives a layer without a bias parameter"""
+    layer = Linear(4, 4, bias=False)
+    check_true(layer.bias is None, "bias should be None")
+    check_close(layer(torch.zeros(2, 4)), torch.zeros(2, 4))
+--- hints
+- Wrap tensors in nn.Parameter so they are registered and trained.
+- torch.empty(...).uniform_(-bound, bound) draws the initial values.
+
+=== activations | GELU, SiLU and Leaky ReLU | Easy
+--- description
+Implement three activation functions element-wise, without the built-in versions in `torch.nn` / `torch.nn.functional`:
+
+- `gelu(x) = x * Phi(x)`, with `Phi` the standard normal CDF: `0.5 * (1 + erf(x / sqrt(2)))`
+- `silu(x) = x * sigmoid(x)` (also called Swish)
+- `leaky_relu(x, slope) = x if x > 0 else slope * x`
+--- starter
+import math
+import torch
+
+
+def gelu(x: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+
+
+def silu(x: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+
+
+def leaky_relu(x: torch.Tensor, slope: float = 0.01) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import math
+import torch
+
+
+def gelu(x: torch.Tensor) -> torch.Tensor:
+    return x * 0.5 * (1.0 + torch.erf(x / math.sqrt(2.0)))
+
+
+def silu(x: torch.Tensor) -> torch.Tensor:
+    return x * torch.sigmoid(x)
+
+
+def leaky_relu(x: torch.Tensor, slope: float = 0.01) -> torch.Tensor:
+    return torch.where(x > 0, x, slope * x)
+--- tests
+def test_gelu():
+    """gelu matches F.gelu"""
+    x = torch.linspace(-5, 5, 41)
+    check_close(gelu(x), torch.nn.functional.gelu(x), tol=1e-5)
+
+def test_silu():
+    """silu matches F.silu"""
+    x = torch.linspace(-6, 6, 37)
+    check_close(silu(x), torch.nn.functional.silu(x), tol=1e-5)
+
+def test_leaky_relu():
+    """leaky_relu matches F.leaky_relu for two slopes"""
+    x = torch.randn(3, 9)
+    check_close(leaky_relu(x), torch.nn.functional.leaky_relu(x, 0.01))
+    check_close(leaky_relu(x, 0.2), torch.nn.functional.leaky_relu(x, 0.2))
+--- hints
+- torch.erf gives the Gaussian error function for the exact GELU.
+- torch.where(x > 0, x, slope * x) implements the leaky ReLU.
+
+=== dropout | Inverted Dropout | Easy
+--- description
+Implement `dropout(x, p, training)` without `F.dropout` or `nn.Dropout`.
+
+- When `training` is False or `p == 0`, return `x` unchanged.
+- Otherwise zero each element independently with probability `p` and multiply the survivors by `1 / (1 - p)` so the expected value is unchanged.
+--- starter
+import torch
+
+
+def dropout(x: torch.Tensor, p: float = 0.5, training: bool = True) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def dropout(x: torch.Tensor, p: float = 0.5, training: bool = True) -> torch.Tensor:
+    if not training or p == 0.0:
+        return x
+    mask = (torch.rand_like(x) >= p).to(x.dtype)
+    return x * mask / (1.0 - p)
+--- tests
+def test_eval_is_identity():
+    """No change when training=False"""
+    x = torch.randn(10, 10)
+    check_equal(dropout(x, 0.7, training=False), x)
+
+def test_p_zero():
+    """No change when p = 0"""
+    x = torch.randn(10, 10)
+    check_equal(dropout(x, 0.0, training=True), x)
+
+def test_values_and_rate():
+    """Survivors are scaled by 1/(1-p) and about p of the entries are dropped"""
+    x = torch.ones(200, 200)
+    out = dropout(x, 0.3, training=True)
+    kept = out != 0
+    check_close(out[kept], torch.full_like(out[kept], 1 / 0.7), name="surviving values")
+    rate = 1 - kept.float().mean().item()
+    check_true(abs(rate - 0.3) < 0.02, "drop rate %.3f is not close to 0.3" % rate)
+
+def test_expectation_preserved():
+    """The mean is approximately preserved"""
+    x = torch.ones(300, 300) * 2.0
+    check_true(abs(dropout(x, 0.5, True).mean().item() - 2.0) < 0.05, "mean changed too much")
+--- hints
+- Draw a mask with torch.rand_like(x) >= p.
+- Divide the kept values by (1 - p) so the expected activation is unchanged.
+
+=== batch-norm | Batch Normalization (1-D) | Medium
+--- description
+Implement `BatchNorm1d(num_features, eps=1e-5, momentum=0.1)` as an `nn.Module` for inputs of shape `(N, C)`, without `nn.BatchNorm1d` or `F.batch_norm`.
+
+It needs
+
+- parameters `weight` (ones) and `bias` (zeros), each `(C,)`
+- buffers `running_mean` (zeros) and `running_var` (ones), registered with `register_buffer`
+
+**Training mode** (`self.training` is True): normalize with the batch mean and the biased batch variance (divide by `N`), and update
+
+```
+running_mean = (1 - momentum) * running_mean + momentum * batch_mean
+running_var  = (1 - momentum) * running_var  + momentum * unbiased_batch_var   # divide by N - 1
+```
+
+**Eval mode**: normalize with the running statistics and do not update them.
+
+Output: `weight * (x - mean) / sqrt(var + eps) + bias`.
+--- starter
+import torch
+import torch.nn as nn
+
+
+class BatchNorm1d(nn.Module):
+    def __init__(self, num_features: int, eps: float = 1e-5, momentum: float = 0.1):
+        super().__init__()
+        self.eps = eps
+        self.momentum = momentum
+        # TODO: parameters and buffers
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import torch
+import torch.nn as nn
+
+
+class BatchNorm1d(nn.Module):
+    def __init__(self, num_features: int, eps: float = 1e-5, momentum: float = 0.1):
+        super().__init__()
+        self.eps = eps
+        self.momentum = momentum
+        self.weight = nn.Parameter(torch.ones(num_features))
+        self.bias = nn.Parameter(torch.zeros(num_features))
+        self.register_buffer("running_mean", torch.zeros(num_features))
+        self.register_buffer("running_var", torch.ones(num_features))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.training:
+            mean = x.mean(dim=0)
+            var = x.var(dim=0, unbiased=False)
+            with torch.no_grad():
+                n = x.shape[0]
+                unbiased = var * n / max(n - 1, 1)
+                self.running_mean.mul_(1 - self.momentum).add_(self.momentum * mean)
+                self.running_var.mul_(1 - self.momentum).add_(self.momentum * unbiased)
+        else:
+            mean, var = self.running_mean, self.running_var
+        return self.weight * (x - mean) / torch.sqrt(var + self.eps) + self.bias
+--- tests
+def _pair(c):
+    mine, ref = BatchNorm1d(c), torch.nn.BatchNorm1d(c)
+    with torch.no_grad():
+        w, b = torch.rand(c) + 0.5, torch.randn(c)
+        mine.weight.copy_(w); mine.bias.copy_(b)
+        ref.weight.copy_(w); ref.bias.copy_(b)
+    return mine, ref
+
+def test_train_output():
+    """Training-mode output matches nn.BatchNorm1d"""
+    mine, ref = _pair(6)
+    x = torch.randn(16, 6) * 3 + 1
+    check_close(mine(x), ref(x))
+
+def test_running_stats():
+    """Running statistics match after several training batches"""
+    mine, ref = _pair(4)
+    for _ in range(5):
+        x = torch.randn(8, 4) * 2 + 3
+        mine(x); ref(x)
+    check_close(mine.running_mean, ref.running_mean, name="running_mean")
+    check_close(mine.running_var, ref.running_var, name="running_var")
+
+def test_eval_mode():
+    """Eval mode uses running statistics and does not update them"""
+    mine, ref = _pair(4)
+    for _ in range(3):
+        x = torch.randn(8, 4) + 2
+        mine(x); ref(x)
+    mine.eval(); ref.eval()
+    before = mine.running_mean.clone()
+    x = torch.randn(5, 4) * 10
+    check_close(mine(x), ref(x))
+    check_equal(mine.running_mean, before, name="running_mean after an eval forward")
+
+def test_registration():
+    """weight/bias are parameters; running stats are buffers in the state dict"""
+    bn = BatchNorm1d(3)
+    check_equal(sorted(n for n, _ in bn.named_parameters()), ["bias", "weight"], name="parameter names")
+    check_true("running_mean" in bn.state_dict() and "running_var" in bn.state_dict(), "running stats must be registered buffers")
+--- hints
+- Use self.register_buffer so the running statistics move with .to(device) and are saved in the state dict.
+- Update the running statistics under torch.no_grad() so they do not become part of the graph.
+
+=== layer-norm | Layer Normalization | Easy
+--- description
+Implement `LayerNorm(dim, eps=1e-5)` as an `nn.Module` that normalizes over the last dimension, without `nn.LayerNorm` or `F.layer_norm`.
+
+- parameters `weight` (ones) and `bias` (zeros) of shape `(dim,)`
+- `forward(x)`: for each vector along the last dimension, subtract its mean, divide by `sqrt(variance + eps)` (biased variance), then apply `weight` and `bias`
+--- starter
+import torch
+import torch.nn as nn
+
+
+class LayerNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        # TODO
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import torch
+import torch.nn as nn
+
+
+class LayerNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.bias = nn.Parameter(torch.zeros(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        mean = x.mean(dim=-1, keepdim=True)
+        var = x.var(dim=-1, keepdim=True, unbiased=False)
+        return self.weight * (x - mean) / torch.sqrt(var + self.eps) + self.bias
+--- tests
+def test_matches_torch():
+    """Matches nn.LayerNorm with non-trivial weight and bias"""
+    mine, ref = LayerNorm(8), torch.nn.LayerNorm(8)
+    with torch.no_grad():
+        w, b = torch.rand(8) + 0.5, torch.randn(8)
+        mine.weight.copy_(w); mine.bias.copy_(b)
+        ref.weight.copy_(w); ref.bias.copy_(b)
+    x = torch.randn(2, 5, 8) * 4 + 2
+    check_close(mine(x), ref(x))
+
+def test_statistics():
+    """With default parameters each vector has zero mean and unit variance"""
+    out = LayerNorm(16)(torch.randn(3, 16) * 7 + 5)
+    check_close(out.mean(dim=-1), torch.zeros(3), tol=1e-4, name="mean")
+    check_close(out.var(dim=-1, unbiased=False), torch.ones(3), tol=1e-3, name="variance")
+
+def test_independent_of_batch():
+    """Each example is normalized independently of the others"""
+    ln = LayerNorm(6)
+    x = torch.randn(4, 6)
+    check_close(ln(x)[1], ln(x[1:2])[0])
+--- hints
+- Take the mean and the biased variance over the last dimension with keepdim=True.
+- Apply weight and bias after normalizing.
+
+=== rms-norm | RMSNorm | Easy
+--- description
+Implement `RMSNorm(dim, eps=1e-6)`, the normalization used in Llama-style models.
+
+```
+rms(x) = sqrt(mean(x ** 2, over the last dim) + eps)
+output = weight * x / rms(x)
+```
+
+`weight` is a learnable parameter of shape `(dim,)` initialized to ones. There is no mean subtraction and no bias.
+--- starter
+import torch
+import torch.nn as nn
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        # TODO
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import torch
+import torch.nn as nn
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+        return self.weight * x / rms
+--- tests
+def test_formula():
+    """Matches the definition"""
+    norm = RMSNorm(8)
+    with torch.no_grad():
+        norm.weight.copy_(torch.rand(8) + 0.5)
+    x = torch.randn(3, 4, 8) * 3
+    expected = norm.weight.detach() * x / torch.sqrt((x ** 2).mean(-1, keepdim=True) + 1e-6)
+    check_close(norm(x), expected)
+
+def test_unit_rms():
+    """With weight = 1 the output has root-mean-square 1"""
+    out = RMSNorm(32)(torch.randn(5, 32) * 9)
+    check_close(out.pow(2).mean(-1).sqrt(), torch.ones(5), tol=1e-3)
+
+def test_no_centering():
+    """The mean is not subtracted: a constant vector maps to +-1, not 0"""
+    out = RMSNorm(4)(torch.full((1, 4), -3.0))
+    check_close(out, torch.full((1, 4), -1.0), tol=1e-3)
+
+def test_single_parameter():
+    """Only a weight parameter, no bias"""
+    check_equal([n for n, _ in RMSNorm(4).named_parameters()], ["weight"], name="parameter names")
+--- hints
+- rms = sqrt(mean(x^2) + eps) over the last dimension, keepdim=True.
+- No mean subtraction and no bias: just weight * x / rms.
+
+=== group-norm | Group Normalization | Medium
+--- description
+Implement `group_norm(x, num_groups, weight, bias, eps)` for inputs of shape `(N, C, H, W)`, without `F.group_norm` or `nn.GroupNorm`.
+
+Split the `C` channels into `num_groups` consecutive groups. For each example and each group, compute the mean and (biased) variance over all channels in the group and all spatial positions, and normalize. Then apply the per-channel `weight` and `bias` of shape `(C,)`.
+
+`C` is divisible by `num_groups`.
+--- starter
+import torch
+
+
+def group_norm(x: torch.Tensor, num_groups: int, weight: torch.Tensor, bias: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def group_norm(x: torch.Tensor, num_groups: int, weight: torch.Tensor, bias: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+    n, c, h, w = x.shape
+    g = x.reshape(n, num_groups, -1)
+    mean = g.mean(dim=-1, keepdim=True)
+    var = g.var(dim=-1, keepdim=True, unbiased=False)
+    g = (g - mean) / torch.sqrt(var + eps)
+    out = g.reshape(n, c, h, w)
+    return out * weight.view(1, c, 1, 1) + bias.view(1, c, 1, 1)
+--- tests
+def test_matches_torch():
+    """Matches F.group_norm"""
+    x = torch.randn(2, 6, 4, 5) * 2 + 1
+    w, b = torch.rand(6) + 0.5, torch.randn(6)
+    check_close(group_norm(x, 3, w, b), torch.nn.functional.group_norm(x, 3, w, b))
+
+def test_one_group_is_layer_norm():
+    """One group normalizes over all of (C, H, W)"""
+    x = torch.randn(3, 4, 2, 2)
+    out = group_norm(x, 1, torch.ones(4), torch.zeros(4))
+    check_close(out.reshape(3, -1).mean(-1), torch.zeros(3), tol=1e-4, name="per-example mean")
+    check_close(out, torch.nn.functional.group_norm(x, 1))
+
+def test_channel_groups_is_instance_norm():
+    """One channel per group equals instance normalization"""
+    x = torch.randn(2, 5, 3, 3)
+    out = group_norm(x, 5, torch.ones(5), torch.zeros(5))
+    check_close(out, torch.nn.functional.instance_norm(x), tol=1e-4)
+--- hints
+- Reshape to (N, G, -1) so each row holds one group's channels and positions.
+
+=== embedding-layer | Embedding Layer | Easy
+--- description
+Implement `Embedding(num_embeddings, dim, padding_idx=None)` as an `nn.Module` without `nn.Embedding` or `F.embedding`.
+
+- `self.weight`: parameter of shape `(num_embeddings, dim)` initialized from a standard normal
+- if `padding_idx` is given, that row is initialized to zeros
+- `forward(ids)`: `ids` is an integer tensor of any shape; return a tensor of shape `ids.shape + (dim,)` with the corresponding rows
+--- starter
+import torch
+import torch.nn as nn
+
+
+class Embedding(nn.Module):
+    def __init__(self, num_embeddings: int, dim: int, padding_idx=None):
+        super().__init__()
+        # TODO
+
+    def forward(self, ids: torch.Tensor) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import torch
+import torch.nn as nn
+
+
+class Embedding(nn.Module):
+    def __init__(self, num_embeddings: int, dim: int, padding_idx=None):
+        super().__init__()
+        weight = torch.randn(num_embeddings, dim)
+        if padding_idx is not None:
+            weight[padding_idx] = 0.0
+        self.weight = nn.Parameter(weight)
+
+    def forward(self, ids: torch.Tensor) -> torch.Tensor:
+        return self.weight[ids]
+--- tests
+def test_lookup():
+    """Returns the rows selected by ids"""
+    emb = Embedding(10, 4)
+    ids = torch.tensor([[1, 2, 3], [9, 0, 1]])
+    out = emb(ids)
+    check_shape(out, (2, 3, 4))
+    check_close(out[1, 0], emb.weight[9].detach())
+    check_close(out, torch.nn.functional.embedding(ids, emb.weight.detach()))
+
+def test_padding_row():
+    """The padding row starts at zero"""
+    emb = Embedding(6, 5, padding_idx=0)
+    check_close(emb.weight[0], torch.zeros(5))
+    check_true(emb.weight[1:].abs().sum() > 0, "other rows should be randomly initialized")
+
+def test_sparse_gradient():
+    """Only looked-up rows receive gradient, and repeated ids accumulate"""
+    emb = Embedding(5, 3)
+    emb(torch.tensor([1, 1, 4])).sum().backward()
+    expected = torch.zeros(5, 3)
+    expected[1], expected[4] = 2.0, 1.0
+    check_close(emb.weight.grad, expected, name="weight.grad")
+--- hints
+- Advanced indexing weight[ids] returns ids.shape + (dim,).
+- Zero the padding row before wrapping the tensor in nn.Parameter.
+
+=== conv2d | 2-D Convolution | Hard
+--- description
+Implement `conv2d(x, weight, bias, stride, padding)` without `F.conv2d` or `nn.Conv2d`.
+
+- `x`: `(N, C_in, H, W)`
+- `weight`: `(C_out, C_in, kH, kW)`, `bias`: `(C_out,)` or `None`
+- `stride` and `padding` are ints applied to both spatial dimensions (zero padding)
+- returns `(N, C_out, H_out, W_out)` with `H_out = (H + 2 * padding - kH) // stride + 1`
+
+Like PyTorch, this is cross-correlation (the kernel is not flipped). You may use `F.unfold` or `F.pad`.
+--- starter
+import torch
+import torch.nn.functional as F
+
+
+def conv2d(x: torch.Tensor, weight: torch.Tensor, bias=None, stride: int = 1, padding: int = 0) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn.functional as F
+
+
+def conv2d(x: torch.Tensor, weight: torch.Tensor, bias=None, stride: int = 1, padding: int = 0) -> torch.Tensor:
+    n, _, h, w = x.shape
+    c_out, _, kh, kw = weight.shape
+    h_out = (h + 2 * padding - kh) // stride + 1
+    w_out = (w + 2 * padding - kw) // stride + 1
+    cols = F.unfold(x, kernel_size=(kh, kw), padding=padding, stride=stride)
+    out = weight.reshape(c_out, -1) @ cols
+    if bias is not None:
+        out = out + bias.view(1, c_out, 1)
+    return out.reshape(n, c_out, h_out, w_out)
+--- tests
+def test_basic():
+    """Stride 1, no padding"""
+    x, w, b = torch.randn(2, 3, 8, 8), torch.randn(4, 3, 3, 3), torch.randn(4)
+    check_close(conv2d(x, w, b), torch.nn.functional.conv2d(x, w, b), tol=1e-4)
+
+def test_stride_padding():
+    """Stride 2 with padding 1 and a non-square kernel"""
+    x, w, b = torch.randn(1, 2, 9, 7), torch.randn(5, 2, 3, 5), torch.randn(5)
+    expected = torch.nn.functional.conv2d(x, w, b, stride=2, padding=1)
+    out = conv2d(x, w, b, stride=2, padding=1)
+    check_close(out, expected, tol=1e-4)
+
+def test_no_bias():
+    """bias=None"""
+    x, w = torch.randn(2, 1, 5, 5), torch.randn(3, 1, 2, 2)
+    check_close(conv2d(x, w), torch.nn.functional.conv2d(x, w), tol=1e-4)
+
+def test_identity_kernel():
+    """A 1 x 1 kernel of ones on one channel returns the input"""
+    x = torch.randn(1, 1, 4, 4)
+    check_close(conv2d(x, torch.ones(1, 1, 1, 1)), x)
+--- hints
+- F.unfold extracts every kernel-sized patch as a column: the result has shape (N, C_in * kH * kW, L).
+- A convolution is then one matrix product between the flattened kernels and those columns.
+
+=== max-pool2d | 2-D Max Pooling | Medium
+--- description
+Implement `max_pool2d(x, kernel, stride)` without `F.max_pool2d` or `nn.MaxPool2d`.
+
+- `x`: `(N, C, H, W)`
+- square window `kernel` and step `stride`, no padding
+- returns `(N, C, H_out, W_out)` with `H_out = (H - kernel) // stride + 1`
+--- starter
+import torch
+
+
+def max_pool2d(x: torch.Tensor, kernel: int = 2, stride: int = 2) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def max_pool2d(x: torch.Tensor, kernel: int = 2, stride: int = 2) -> torch.Tensor:
+    patches = x.unfold(2, kernel, stride).unfold(3, kernel, stride)
+    return patches.max(dim=-1).values.max(dim=-1).values
+--- tests
+def test_basic():
+    """2 x 2 pooling of a 4 x 4 map"""
+    x = torch.arange(16.0).reshape(1, 1, 4, 4)
+    check_close(max_pool2d(x, 2, 2), [[[[5.0, 7.0], [13.0, 15.0]]]])
+
+def test_matches_torch():
+    """Matches F.max_pool2d"""
+    x = torch.randn(2, 3, 8, 10)
+    check_close(max_pool2d(x, 2, 2), torch.nn.functional.max_pool2d(x, 2, 2))
+
+def test_overlapping():
+    """Overlapping windows (kernel 3, stride 1) and an odd size"""
+    x = torch.randn(1, 2, 7, 5)
+    check_close(max_pool2d(x, 3, 1), torch.nn.functional.max_pool2d(x, 3, 1))
+    check_close(max_pool2d(x, 3, 2), torch.nn.functional.max_pool2d(x, 3, 2))
+--- hints
+- Tensor.unfold(dim, size, step) creates sliding windows along one dimension; apply it to H and then W.
+
+=== residual-block | Pre-Norm Residual MLP Block | Easy
+--- description
+Implement `ResidualBlock(dim, hidden)`, the feed-forward half of a pre-norm Transformer block:
+
+```
+y = x + fc2(gelu(fc1(norm(x))))
+```
+
+Use these attribute names so the tests can inspect them:
+
+- `self.norm = nn.LayerNorm(dim)`
+- `self.fc1 = nn.Linear(dim, hidden)`
+- `self.fc2 = nn.Linear(hidden, dim)`
+
+The skip connection must add the un-normalized input `x`.
+--- starter
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, dim: int, hidden: int):
+        super().__init__()
+        # TODO
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, dim: int, hidden: int):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.fc1 = nn.Linear(dim, hidden)
+        self.fc2 = nn.Linear(hidden, dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.fc2(F.gelu(self.fc1(self.norm(x))))
+--- tests
+def test_forward():
+    """Computes x + fc2(gelu(fc1(norm(x))))"""
+    block = ResidualBlock(8, 32)
+    x = torch.randn(2, 5, 8)
+    expected = x + block.fc2(torch.nn.functional.gelu(block.fc1(block.norm(x))))
+    check_close(block(x), expected)
+
+def test_identity_when_branch_is_zero():
+    """Zeroing the last layer turns the block into the identity"""
+    block = ResidualBlock(6, 12)
+    with torch.no_grad():
+        block.fc2.weight.zero_(); block.fc2.bias.zero_()
+    x = torch.randn(4, 6) * 5
+    check_close(block(x), x)
+
+def test_gradient_through_skip():
+    """With a zeroed branch the input gradient is exactly the identity path"""
+    block = ResidualBlock(6, 12)
+    with torch.no_grad():
+        block.fc2.weight.zero_(); block.fc2.bias.zero_()
+    x = torch.randn(3, 6, requires_grad=True)
+    block(x).sum().backward()
+    check_close(x.grad, torch.ones(3, 6), name="dL/dx")
+--- hints
+- Normalize inside the branch only: the skip adds the raw x.
+- Order: norm, fc1, GELU, fc2, then add x.
+
+=== lstm-cell | LSTM Cell | Medium
+--- description
+Implement one step of an LSTM using PyTorch's parameter layout.
+
+`lstm_cell(x, h, c, w_ih, w_hh, b_ih, b_hh)` with
+
+- `x`: `(N, input_size)`, `h` and `c`: `(N, hidden_size)`
+- `w_ih`: `(4 * hidden, input_size)`, `w_hh`: `(4 * hidden, hidden)`, `b_ih`, `b_hh`: `(4 * hidden,)`
+
+```
+gates = x @ w_ih.T + b_ih + h @ w_hh.T + b_hh
+i, f, g, o = gates split into four chunks of size hidden (in this order)
+i, f, o = sigmoid(i), sigmoid(f), sigmoid(o);  g = tanh(g)
+c_next = f * c + i * g
+h_next = o * tanh(c_next)
+```
+
+Return `(h_next, c_next)`. Do not use `nn.LSTMCell` or `nn.LSTM`.
+--- starter
+import torch
+
+
+def lstm_cell(x, h, c, w_ih, w_hh, b_ih, b_hh):
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def lstm_cell(x, h, c, w_ih, w_hh, b_ih, b_hh):
+    gates = x @ w_ih.T + b_ih + h @ w_hh.T + b_hh
+    i, f, g, o = gates.chunk(4, dim=-1)
+    i, f, o = torch.sigmoid(i), torch.sigmoid(f), torch.sigmoid(o)
+    g = torch.tanh(g)
+    c_next = f * c + i * g
+    h_next = o * torch.tanh(c_next)
+    return h_next, c_next
+--- tests
+def test_matches_torch():
+    """Matches nn.LSTMCell given the same weights"""
+    ref = torch.nn.LSTMCell(5, 7)
+    x, h, c = torch.randn(3, 5), torch.randn(3, 7), torch.randn(3, 7)
+    with torch.no_grad():
+        h_ref, c_ref = ref(x, (h, c))
+        h_new, c_new = lstm_cell(x, h, c, ref.weight_ih, ref.weight_hh, ref.bias_ih, ref.bias_hh)
+    check_close(h_new, h_ref, tol=1e-5, name="h_next")
+    check_close(c_new, c_ref, tol=1e-5, name="c_next")
+
+def test_sequence():
+    """Unrolling over a sequence matches nn.LSTM"""
+    ref = torch.nn.LSTM(4, 6, batch_first=True)
+    x = torch.randn(2, 9, 4)
+    with torch.no_grad():
+        out_ref, _ = ref(x)
+        h, c = torch.zeros(2, 6), torch.zeros(2, 6)
+        outs = []
+        for t in range(9):
+            h, c = lstm_cell(x[:, t], h, c, ref.weight_ih_l0, ref.weight_hh_l0, ref.bias_ih_l0, ref.bias_hh_l0)
+            outs.append(h)
+    check_close(torch.stack(outs, dim=1), out_ref, tol=1e-5)
+
+def test_forget_gate_closed():
+    """A strongly negative forget gate erases the previous cell state"""
+    hidden = 3
+    w_ih, w_hh = torch.zeros(4 * hidden, 2), torch.zeros(4 * hidden, hidden)
+    b_ih, b_hh = torch.zeros(4 * hidden), torch.zeros(4 * hidden)
+    b_ih[hidden:2 * hidden] = -100.0
+    _, c_next = lstm_cell(torch.randn(1, 2), torch.randn(1, hidden), torch.full((1, hidden), 50.0), w_ih, w_hh, b_ih, b_hh)
+    check_close(c_next, torch.zeros(1, hidden), tol=1e-4, name="c_next")
+--- hints
+- Compute all four gates in one affine map and split with chunk(4, dim=-1).
+- PyTorch's gate order is input, forget, cell candidate, output.
+
+=== gru-cell | GRU Cell | Medium
+--- description
+Implement one step of a GRU using PyTorch's parameter layout.
+
+`gru_cell(x, h, w_ih, w_hh, b_ih, b_hh)` with `w_ih`: `(3 * hidden, input_size)`, `w_hh`: `(3 * hidden, hidden)`, biases `(3 * hidden,)`. Split `x @ w_ih.T + b_ih` and `h @ w_hh.T + b_hh` each into three chunks `(r, z, n)`:
+
+```
+r = sigmoid(x_r + h_r)
+z = sigmoid(x_z + h_z)
+n = tanh(x_n + r * h_n)
+h_next = (1 - z) * n + z * h
+```
+
+Note that the reset gate multiplies the hidden contribution after its bias has been added. Return `h_next`.
+--- starter
+import torch
+
+
+def gru_cell(x, h, w_ih, w_hh, b_ih, b_hh):
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def gru_cell(x, h, w_ih, w_hh, b_ih, b_hh):
+    gi = x @ w_ih.T + b_ih
+    gh = h @ w_hh.T + b_hh
+    i_r, i_z, i_n = gi.chunk(3, dim=-1)
+    h_r, h_z, h_n = gh.chunk(3, dim=-1)
+    r = torch.sigmoid(i_r + h_r)
+    z = torch.sigmoid(i_z + h_z)
+    n = torch.tanh(i_n + r * h_n)
+    return (1 - z) * n + z * h
+--- tests
+def test_matches_torch():
+    """Matches nn.GRUCell given the same weights"""
+    ref = torch.nn.GRUCell(5, 7)
+    x, h = torch.randn(3, 5), torch.randn(3, 7)
+    with torch.no_grad():
+        expected = ref(x, h)
+        out = gru_cell(x, h, ref.weight_ih, ref.weight_hh, ref.bias_ih, ref.bias_hh)
+    check_close(out, expected, tol=1e-5)
+
+def test_update_gate_open():
+    """z close to 1 copies the previous hidden state"""
+    hidden = 4
+    w_ih, w_hh = torch.zeros(3 * hidden, 2), torch.zeros(3 * hidden, hidden)
+    b_ih, b_hh = torch.zeros(3 * hidden), torch.zeros(3 * hidden)
+    b_ih[hidden:2 * hidden] = 100.0
+    h = torch.randn(2, hidden)
+    check_close(gru_cell(torch.randn(2, 2), h, w_ih, w_hh, b_ih, b_hh), h, tol=1e-4)
+
+def test_sequence():
+    """Unrolling over a sequence matches nn.GRU"""
+    ref = torch.nn.GRU(3, 5, batch_first=True)
+    x = torch.randn(2, 6, 3)
+    with torch.no_grad():
+        out_ref, _ = ref(x)
+        h = torch.zeros(2, 5)
+        outs = []
+        for t in range(6):
+            h = gru_cell(x[:, t], h, ref.weight_ih_l0, ref.weight_hh_l0, ref.bias_ih_l0, ref.bias_hh_l0)
+            outs.append(h)
+    check_close(torch.stack(outs, dim=1), out_ref, tol=1e-5)
+--- hints
+- Compute the input and hidden contributions separately; each splits into (r, z, n).
+- The reset gate multiplies only the hidden part of the candidate: tanh(i_n + r * h_n).
+
+=== kaiming-init | Kaiming (He) Initialization | Easy
+--- description
+Implement `kaiming_normal_(tensor)` that fills a weight tensor in place with samples from `Normal(0, std^2)` where
+
+```
+std = sqrt(2 / fan_in)
+```
+
+- for a linear weight of shape `(out, in)`, `fan_in = in`
+- for a convolution weight of shape `(out, in, kH, kW)`, `fan_in = in * kH * kW`
+
+Return the same tensor object. Do not call `torch.nn.init.kaiming_normal_`.
+--- starter
+import math
+import torch
+
+
+def kaiming_normal_(tensor: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import math
+import torch
+
+
+def kaiming_normal_(tensor: torch.Tensor) -> torch.Tensor:
+    fan_in = tensor.shape[1]
+    for s in tensor.shape[2:]:
+        fan_in *= s
+    std = math.sqrt(2.0 / fan_in)
+    with torch.no_grad():
+        tensor.normal_(0.0, std)
+    return tensor
+--- tests
+def test_linear():
+    """std = sqrt(2 / in) for a linear weight"""
+    w = torch.empty(400, 200)
+    out = kaiming_normal_(w)
+    check_true(out is w, "the tensor must be filled in place and returned")
+    check_true(abs(w.std().item() - math.sqrt(2 / 200)) < 0.005, "std %.4f, expected %.4f" % (w.std().item(), math.sqrt(2 / 200)))
+    check_true(abs(w.mean().item()) < 0.005, "mean should be close to 0")
+
+def test_conv():
+    """fan_in includes the kernel area for a conv weight"""
+    w = torch.empty(64, 32, 3, 3)
+    kaiming_normal_(w)
+    expected = math.sqrt(2 / (32 * 9))
+    check_true(abs(w.std().item() - expected) < 0.004, "std %.4f, expected %.4f" % (w.std().item(), expected))
+
+def test_parameter():
+    """Works on an nn.Parameter that requires grad"""
+    p = torch.nn.Parameter(torch.zeros(50, 100))
+    kaiming_normal_(p)
+    check_true(p.abs().sum() > 0, "the parameter was not modified")
+    check_true(p.requires_grad, "requires_grad should be preserved")
+
+def test_activation_variance_preserved():
+    """A ReLU layer initialized this way roughly preserves the second moment"""
+    w = kaiming_normal_(torch.empty(2000, 1000))
+    x = torch.randn(64, 1000)
+    h = torch.relu(x @ w.T)
+    ratio = (h.pow(2).mean() / x.pow(2).mean()).item()
+    check_true(0.85 < ratio < 1.15, "second-moment ratio %.3f should be close to 1" % ratio)
+--- hints
+- fan_in is the product of every dimension except the first.
+- Fill in place with tensor.normal_(0, std) under torch.no_grad().
+

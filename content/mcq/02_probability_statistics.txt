@@ -1,0 +1,178 @@
+# topic: Probability & Statistics
+# id: prob
+# subtopics: Bayes' rule and conditional probability; Common distributions; Expectation, variance and covariance; MLE and MAP estimation; Hypothesis tests, p-values and confidence intervals; Central limit theorem and sampling; Information theory (entropy, KL, cross-entropy)
+
+Q: A disease affects 1% of people. A test has 99% sensitivity and 95% specificity. Given a positive result, the probability of having the disease is closest to [M]
+- 99%
+- 95%
+- 50%
+* 17%
+> P(D|+) = 0.99*0.01 / (0.99*0.01 + 0.05*0.99) = 0.0099 / 0.0594, about 0.167. With a rare condition, false positives dominate.
+
+Q: Maximum likelihood estimation of the mean of a Gaussian with known variance gives [E]
+- the sample median
+* the sample mean
+- the sample mode
+- the midpoint of min and max
+> Maximizing the Gaussian log-likelihood is minimizing the sum of squared deviations, which is achieved by the sample mean.
+
+Q: The MLE of the variance of a Gaussian, (1/n) * sum (x_i - mean)^2, is [M]
+- unbiased
+* biased low by a factor (n-1)/n
+- biased high by a factor n/(n-1)
+- inconsistent
+> E[MLE variance] = (n-1)/n * sigma^2. Dividing by n-1 (Bessel's correction) gives the unbiased estimator; the MLE is still consistent.
+
+Q: MAP estimation with a zero-mean Gaussian prior on the weights of a linear regression model is equivalent to [E]
+- L1 regularization (lasso)
+* L2 regularization (ridge)
+- Early stopping
+- Dropout
+> The negative log of a Gaussian prior is proportional to ||w||^2, which adds an L2 penalty to the negative log-likelihood. A Laplace prior gives L1.
+
+Q: If X and Y are independent, which statement is always true? [E]
+* Cov(X, Y) = 0
+- Var(X + Y) = Var(X) - Var(Y)
+- E[X/Y] = E[X]/E[Y]
+- X and Y have the same distribution
+> Independence implies zero covariance (the converse is false). Variances add for independent variables.
+
+Q: Zero correlation between X and Y implies independence [M]
+- always
+- never
+* when (X, Y) are jointly Gaussian
+- when X and Y are both uniformly distributed
+> Uncorrelated does not generally imply independent (take Y = X^2 with symmetric X), but for jointly Gaussian variables it does.
+
+Q: A p-value of 0.03 means [M]
+- there is a 3% probability that the null hypothesis is true
+- there is a 97% probability that the alternative is true
+* if the null hypothesis were true, data at least this extreme would occur 3% of the time
+- the effect size is 0.03
+> The p-value is P(data at least as extreme | H0). It is not the posterior probability of H0, and says nothing by itself about effect size.
+
+Q: The central limit theorem states that, for i.i.d. variables with finite variance, as n grows [E]
+- each sample becomes normally distributed
+* the standardized sample mean converges in distribution to a normal
+- the sample variance goes to zero
+- the sample maximum becomes normal
+> The CLT is about the distribution of the (scaled) sample mean, not about the individual observations.
+
+Q: The standard error of the mean of n i.i.d. samples with standard deviation sigma is [E]
+- sigma
+- sigma / n
+* sigma / sqrt(n)
+- sigma^2 / n
+> Var(mean) = sigma^2 / n, so its standard deviation is sigma / sqrt(n). Quadrupling the data halves the error.
+
+Q: KL(P || Q) is [M]
+- symmetric and always non-negative
+* non-negative and zero only when P = Q, but not symmetric
+- a metric satisfying the triangle inequality
+- bounded above by 1
+> KL divergence is non-negative by Gibbs' inequality, asymmetric, and can be infinite when Q assigns zero probability where P does not.
+
+Q: Minimizing cross-entropy H(P, Q) over Q, with the data distribution P fixed, is equivalent to minimizing [M]
+- H(Q)
+- KL(Q || P)
+* KL(P || Q)
+- the mutual information between P and Q
+> H(P, Q) = H(P) + KL(P || Q), and H(P) does not depend on Q. This is why maximum likelihood equals minimizing forward KL.
+
+Q: Which discrete distribution over K outcomes has the maximum entropy? [E]
+- A one-hot (deterministic) distribution
+* The uniform distribution
+- A geometric distribution
+- A Zipfian distribution
+> Entropy is maximized at log K by the uniform distribution and minimized at 0 by a deterministic one.
+
+Q: The number of events in a fixed interval, when events occur independently at a constant average rate, is modeled by [E]
+- a Bernoulli distribution
+- an exponential distribution
+* a Poisson distribution
+- a beta distribution
+> Counts follow a Poisson; the waiting times between such events follow an exponential distribution.
+
+Q: The conjugate prior for the success probability of a Bernoulli/binomial likelihood is [M]
+- Gaussian
+- Gamma
+- Dirichlet over three outcomes
+* Beta
+> With a Beta(a, b) prior and s successes in n trials, the posterior is Beta(a + s, b + n - s). The Dirichlet generalizes this to multinomials.
+
+Q: You run 20 independent hypothesis tests at significance level 0.05 when all null hypotheses are true. The probability of at least one false positive is about [M]
+- 5%
+- 23%
+* 64%
+- 100%
+> 1 - 0.95^20 is about 0.64. This is the multiple comparisons problem, addressed by Bonferroni or FDR corrections.
+
+Q: A 95% confidence interval for a parameter means [M]
+- the parameter lies in this particular interval with probability 0.95
+* the procedure produces intervals that contain the true parameter in 95% of repeated experiments
+- 95% of the data falls inside the interval
+- the estimate is within 5% of the truth
+> Frequentist coverage is a property of the procedure. A probability statement about the parameter itself requires a Bayesian credible interval.
+
+Q: Type I and Type II errors are, respectively, [E]
+* rejecting a true null; failing to reject a false null
+- failing to reject a false null; rejecting a true null
+- both kinds of false negatives
+- errors in the prior and errors in the likelihood
+> Type I is a false positive (rate alpha); Type II is a false negative (rate beta). Power is 1 - beta.
+
+Q: The law of total variance states Var(Y) = [H]
+- Var(E[Y|X])
+- E[Var(Y|X)] - Var(E[Y|X])
+* E[Var(Y|X)] + Var(E[Y|X])
+- Var(Y|X) * Var(X)
+> Total variance splits into the expected within-group variance plus the variance of the group means (unexplained plus explained).
+
+Q: Jensen's inequality for a convex function f and random variable X states [M]
+- f(E[X]) >= E[f(X)]
+* f(E[X]) <= E[f(X)]
+- f(E[X]) = E[f(X)]
+- E[f(X)] <= 0
+> For convex f the function of the mean is at most the mean of the function. It underlies the ELBO and the non-negativity of KL.
+
+Q: To sample from an arbitrary 1-D distribution with invertible CDF F using uniform random numbers u ~ U(0,1), you compute [M]
+- F(u)
+* F^-1(u)
+- 1 - F(u)
+- u * F(1)
+> Inverse transform sampling: if U is uniform then F^-1(U) has CDF F.
+
+Q: The bootstrap estimates the sampling distribution of a statistic by [M]
+- sampling without replacement half of the data many times
+* resampling the dataset with replacement many times and recomputing the statistic
+- adding Gaussian noise to every data point
+- fitting a Gaussian and sampling from it
+> The non-parametric bootstrap draws n points with replacement from the n observed points. Each resample contains about 63.2% of the unique original points.
+
+Q: Mutual information I(X; Y) is zero if and only if [M]
+- X and Y are uncorrelated
+* X and Y are independent
+- X is a deterministic function of Y
+- H(X) = H(Y)
+> I(X; Y) = KL(p(x, y) || p(x) p(y)), which vanishes exactly when the joint factorizes. Unlike correlation it captures non-linear dependence.
+
+Q: You flip a fair coin until the first head. The expected number of flips is [E]
+- 1
+- 1.5
+* 2
+- infinite
+> The count is geometric with p = 0.5, whose mean is 1/p = 2.
+
+Q: Which of the following makes a t-test preferable to a z-test for a mean? [M]
+- The sample size is very large
+* The population variance is unknown and estimated from a small sample
+- The data are binary
+- More than two groups are compared
+> Using the sample standard deviation adds uncertainty; the t distribution's heavier tails account for it. With large n the two tests coincide. Several groups call for ANOVA.
+
+Q: For a model that outputs class probabilities, the negative log-likelihood of the data under a categorical distribution is the same as [E]
+- mean squared error
+- hinge loss
+* cross-entropy loss
+- the 0-1 loss
+> Cross-entropy with one-hot targets is exactly -log p(correct class), the categorical negative log-likelihood.

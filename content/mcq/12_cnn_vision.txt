@@ -1,0 +1,178 @@
+# topic: CNNs & Computer Vision
+# id: vision
+# subtopics: Convolution arithmetic (stride, padding, dilation); Receptive field and pooling; Classic architectures (ResNet, Inception, MobileNet, EfficientNet); Object detection (anchors, IoU, NMS, mAP); Segmentation; Vision Transformers; Contrastive and self-supervised vision
+
+Q: A 32 x 32 input passes through a convolution with kernel 5, stride 1, padding 0. The spatial output size is [E]
+- 32 x 32
+- 30 x 30
+* 28 x 28
+- 27 x 27
+> Output = floor((n + 2p - k) / s) + 1 = (32 - 5) / 1 + 1 = 28.
+
+Q: A conv layer has 64 input channels, 128 output channels and 3 x 3 kernels with bias. Its parameter count is [E]
+- 1,152
+- 73,728
+* 73,856
+- 8,192
+> 3 * 3 * 64 * 128 = 73,728 weights plus 128 biases = 73,856.
+
+Q: Which property do convolutional layers build in that fully connected layers lack? [E]
+- Rotation invariance
+* Translation equivariance through weight sharing and local connectivity
+- Scale invariance
+- Permutation invariance
+> The same kernel is applied at every position, so shifting the input shifts the feature map. Parameter sharing also reduces the number of weights dramatically.
+
+Q: Two stacked 3 x 3 convolutions (stride 1) have the same receptive field as [M]
+- one 3 x 3 convolution
+* one 5 x 5 convolution
+- one 6 x 6 convolution
+- one 9 x 9 convolution
+> Each additional 3 x 3 layer adds 2 to the receptive field: 3, then 5. Stacking small kernels uses fewer parameters and adds non-linearities.
+
+Q: A 1 x 1 convolution is mainly used to [M]
+- increase spatial resolution
+* change the number of channels and mix information across channels cheaply
+- enlarge the receptive field
+- replace pooling
+> It is a per-pixel linear layer over channels, used in bottlenecks (ResNet, Inception) to reduce or expand channel dimension.
+
+Q: A depthwise separable convolution factorizes a standard convolution into [M]
+- two 1-D convolutions along height and width
+* a per-channel spatial (depthwise) convolution followed by a 1 x 1 (pointwise) convolution
+- a convolution and a max-pool
+- a dilated and a transposed convolution
+> This reduces parameters and computation roughly by a factor of the kernel area, and is the basis of MobileNet and Xception.
+
+Q: Dilated (atrous) convolutions [M]
+- reduce the number of parameters by pruning
+* enlarge the receptive field without adding parameters or reducing resolution
+- up-sample the feature map
+- are equivalent to strided convolutions
+> Inserting gaps between kernel elements widens the area covered; they are popular in segmentation (DeepLab) and audio models (WaveNet).
+
+Q: The key idea introduced by ResNet is [E]
+- using only 1 x 1 convolutions
+* identity shortcut connections so layers learn residual functions
+- removing all pooling layers
+- replacing convolutions by attention
+> Residual connections solved the degradation problem, allowing networks with hundreds of layers to train effectively.
+
+Q: Intersection over Union (IoU) of two boxes is [E]
+- the area of their union
+* the area of their intersection divided by the area of their union
+- the distance between their centres
+- the ratio of their areas
+> IoU ranges from 0 (disjoint) to 1 (identical) and is used for matching predictions to ground truth and in NMS.
+
+Q: Non-maximum suppression (NMS) in object detection [M]
+- increases the number of predicted boxes
+* keeps the highest-scoring box and removes other boxes that overlap it above an IoU threshold, repeatedly
+- merges all boxes into one
+- is applied to the ground-truth boxes
+> NMS removes duplicate detections of the same object. Soft-NMS decays scores instead of deleting boxes.
+
+Q: Two-stage detectors such as Faster R-CNN differ from one-stage detectors such as YOLO or RetinaNet in that they [M]
+- do not use convolution
+* first generate region proposals and then classify and refine each proposal
+- predict only one box per image
+- cannot be trained end to end
+> Two-stage models are typically more accurate on small objects but slower; one-stage models predict classes and boxes densely in one pass.
+
+Q: Mean average precision (mAP) in detection is computed by [M]
+- averaging accuracy over images
+* averaging, over classes (and often IoU thresholds), the area under each class's precision-recall curve
+- taking the mean IoU of all boxes
+- counting boxes per image
+> Detections are ranked by confidence; AP summarizes the PR curve per class. COCO mAP averages over IoU thresholds from 0.5 to 0.95.
+
+Q: A transposed convolution is commonly used to [M]
+- reduce spatial resolution
+* up-sample feature maps with learnable weights, for example in decoders and generators
+- compute the transpose of the weight matrix for backprop only
+- replace batch normalization
+> It maps each input element to a kernel-sized output patch; uneven overlap can cause checkerboard artifacts.
+
+Q: In U-Net, the skip connections between encoder and decoder [M]
+- reduce the number of parameters
+* carry high-resolution features to the decoder so fine spatial detail is recovered
+- replace the loss function
+- are used only at inference time
+> Down-sampling loses localization information; concatenating encoder features lets the decoder combine semantics with detail.
+
+Q: A Vision Transformer (ViT) processes an image by [M]
+- applying self-attention to every pixel separately
+* splitting it into fixed-size patches, linearly embedding them, adding position embeddings and feeding the sequence to a Transformer encoder
+- running a CNN followed by an RNN
+- convolving with learned Gabor filters only
+> A 224 x 224 image with 16 x 16 patches becomes 196 tokens (plus a class token).
+
+Q: Compared with CNNs, Vision Transformers trained from scratch on small datasets tend to [M]
+- generalize better because they have stronger inductive biases
+* perform worse because they lack convolutional inductive biases and need more data or strong augmentation
+- train without position information
+- need no normalization
+> Locality and translation equivariance must be learned from data; large-scale pretraining or DeiT-style recipes close the gap.
+
+Q: Global average pooling before the classifier, instead of flattening into large fully connected layers, [M]
+- increases the number of parameters
+* removes most classifier parameters and allows variable input sizes
+- prevents the use of residual connections
+- makes the network translation variant
+> Averaging each channel over space gives a fixed-length vector regardless of resolution and acts as a structural regularizer.
+
+Q: The dice loss is popular for segmentation because [M]
+- it is identical to cross-entropy
+* it directly optimizes region overlap and is robust to foreground/background imbalance
+- it requires bounding boxes
+- it ignores false negatives
+> Dice = 2|A and B| / (|A| + |B|). With tiny foreground regions, pixel-wise cross-entropy is dominated by background.
+
+Q: In contrastive self-supervised learning such as SimCLR, a positive pair is formed by [M]
+- two different images of the same class label
+* two random augmentations of the same image
+- an image and random noise
+- an image and its label embedding
+> No labels are used; the model learns to pull augmented views together and push other images in the batch apart (InfoNCE loss).
+
+Q: CLIP is trained by [M]
+- classifying images into 1,000 classes
+* contrastively aligning image and text embeddings of matching image-caption pairs
+- reconstructing masked image patches
+- generating captions token by token
+> A symmetric contrastive loss over a batch makes matched image-text pairs similar, enabling zero-shot classification with text prompts.
+
+Q: Max pooling with a 2 x 2 window and stride 2 on a feature map [E]
+- doubles the spatial size
+* halves the height and width and keeps the strongest activation in each window
+- has learnable parameters
+- changes the number of channels
+> Pooling down-samples spatially, adds small translation invariance and has no parameters.
+
+Q: Feature Pyramid Networks (FPN) improve detection of objects at different scales by [H]
+- training separate networks per scale
+* combining low-resolution, semantically strong features with high-resolution features through a top-down pathway and lateral connections
+- resizing the input image many times at inference
+- using larger kernels
+> Each pyramid level gets strong semantics at its own resolution, so small objects are detected on fine maps and large ones on coarse maps.
+
+Q: For a convolution with kernel size k, to keep the output the same spatial size as the input at stride 1 ("same" padding, odd k), the padding must be [E]
+- k
+* (k - 1) / 2
+- k / 2 + 1
+- 0
+> Output = n + 2p - k + 1 = n requires p = (k - 1) / 2, for example p = 1 for a 3 x 3 kernel.
+
+Q: Masked autoencoders (MAE) for vision pretrain by [H]
+- contrasting two augmented views
+* masking a large fraction of patches (around 75%) and reconstructing the missing pixels from the visible ones
+- predicting image rotations
+- classifying patches by position
+> A high masking ratio makes the task non-trivial and the encoder efficient, since it only processes the visible patches.
+
+Q: Anchor boxes in detectors like Faster R-CNN and RetinaNet are [M]
+- ground-truth annotations
+* predefined reference boxes of several scales and aspect ratios, relative to which offsets are predicted
+- the final detections after NMS
+- pixels with the highest activation
+> The network classifies each anchor and regresses offsets to fit objects. Anchor-free detectors (FCOS, CenterNet) predict boxes from points instead.

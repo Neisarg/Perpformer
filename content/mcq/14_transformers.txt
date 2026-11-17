@@ -1,0 +1,178 @@
+# topic: Transformer Architecture
+# id: transformer
+# subtopics: Encoder, decoder and encoder-decoder models; Self-attention internals; Positional encodings (sinusoidal, learned, RoPE, ALiBi); Normalization placement and residual streams; Feed-forward blocks; Efficient attention (flash, sparse, sliding window); Parameter and compute counting
+
+Q: Which model family uses only the Transformer encoder with bidirectional self-attention? [E]
+- GPT
+* BERT
+- T5
+- The original Transformer for translation
+> BERT is encoder-only with masked language modeling. GPT is decoder-only (causal); T5 and the original Transformer are encoder-decoder.
+
+Q: In a Transformer block, the position-wise feed-forward network is applied [E]
+- once to the whole sequence concatenated
+* independently and identically to each position
+- only to the first token
+- only during training
+> The MLP (typically expanding to 4 x d_model and back) acts on each token's vector separately; attention is what mixes information across positions.
+
+Q: Roughly what fraction of a standard Transformer block's parameters are in the feed-forward sub-layer (with 4x expansion) compared with the attention sub-layer? [M]
+- About one tenth
+- About one third
+* About two thirds
+- Nearly all
+> Attention has about 4 d^2 parameters (Q, K, V and output projections); the MLP has about 8 d^2 (d x 4d and 4d x d). So the MLP holds roughly two thirds.
+
+Q: Rotary position embeddings (RoPE) encode position by [M]
+- adding a learned vector to each token embedding
+* rotating pairs of query and key dimensions by an angle proportional to the position, so dot products depend on relative offsets
+- adding a scalar bias to attention scores based on distance
+- concatenating the position index to the embedding
+> After rotation, the inner product of a query at position m and a key at position n depends on m - n. RoPE is applied inside attention at every layer.
+
+Q: ALiBi handles positions by [H]
+- learned absolute position embeddings
+* adding a fixed, head-specific linear penalty proportional to the distance between query and key to the attention scores
+- rotating the embeddings
+- using convolution before attention
+> The linear bias favours nearby tokens and extrapolates to sequences longer than those seen in training, with no position embeddings at all.
+
+Q: During autoregressive generation, a KV cache stores [M]
+- the generated token ids
+* the key and value tensors of previous positions for every layer so they are not recomputed
+- the final logits of all previous steps
+- the gradients of earlier tokens
+> With caching, each new token only computes its own query and attends over stored keys and values, turning per-step cost from O(n^2) into O(n).
+
+Q: In a decoder-only Transformer with d_model = 768 and 12 heads, each head's key/query dimension is typically [E]
+- 768
+- 12
+* 64
+- 9216
+> d_head = d_model / n_heads = 768 / 12 = 64, so that all heads together cost about as much as one full-width head.
+
+Q: The "residual stream" view of a Transformer describes [M]
+- the flow of gradients through the optimizer
+* a shared vector per position that every attention and MLP layer reads from and adds its output to
+- the sequence of sampled tokens
+- the positional encoding only
+> Because each sub-layer writes additively through skip connections, layers communicate via this common channel; the idea is central in mechanistic interpretability.
+
+Q: Why do most modern LLMs use pre-norm rather than post-norm blocks? [M]
+- Pre-norm gives higher final accuracy in every case
+* Pre-norm trains more stably at depth because the skip path is left un-normalized
+- Post-norm cannot be implemented with LayerNorm
+- Pre-norm removes the need for positional information
+> Keeping the identity path clean gives well-behaved gradients in deep stacks. Post-norm can reach slightly better quality when it does train, but needs careful warmup.
+
+Q: Flash attention speeds up attention primarily by [H]
+- approximating attention with low-rank matrices
+* computing exact attention in blocks that fit in fast GPU memory, avoiding materializing the full n x n matrix in slow memory
+- dropping attention to distant tokens
+- quantizing the attention weights to 8 bits
+> It is an IO-aware exact algorithm: tiling plus online softmax reduces memory traffic and makes memory linear in sequence length.
+
+Q: Which is true of a decoder-only model's training on a sequence of n tokens? [M]
+- Only the last token contributes to the loss
+* All n next-token predictions are trained in parallel in one forward pass thanks to the causal mask
+- The model needs n forward passes
+- The targets are the same as the inputs without shifting
+> Position i predicts token i + 1 while seeing only tokens up to i, so one pass gives n training signals (inputs and targets shifted by one).
+
+Q: Grouped-query attention (GQA) [H]
+- groups tokens into chunks before attention
+* shares each key/value head among several query heads, reducing KV cache size
+- uses a different query per layer group
+- removes the value projection
+> GQA interpolates between multi-head (one KV head per query head) and multi-query attention (a single KV head), cutting memory with little quality loss.
+
+Q: The computational cost of a self-attention layer and of a feed-forward layer, for sequence length n and width d, are respectively [M]
+* O(n^2 d) and O(n d^2)
+- O(n d^2) and O(n^2 d)
+- O(n^2 d^2) and O(n d)
+- O(n d) and O(n d)
+> Attention compares all pairs of positions; the MLP is a per-position matrix multiply. For short sequences and large d the MLP dominates.
+
+Q: In the original Transformer, embeddings are multiplied by sqrt(d_model) before adding positional encodings in order to [H]
+- normalize them to unit length
+* scale them up relative to the positional encodings, whose values are bounded in [-1, 1]
+- make them orthogonal
+- speed up the softmax
+> Embeddings are initialized with small variance; scaling keeps the token signal from being drowned out by the positional signal.
+
+Q: Encoder-decoder models differ from decoder-only models in that they [E]
+- cannot generate text
+* encode the input with bidirectional attention and let the decoder attend to it through cross-attention
+- have no attention layers
+- use no positional information
+> Sequence-to-sequence tasks such as translation map a fully visible source to a generated target. Decoder-only models handle them by concatenating input and output in one stream.
+
+Q: Which positional scheme lets every layer see relative distances and is used by Llama-style models? [M]
+- Learned absolute embeddings added at the input
+- Sinusoidal encodings added at the input
+* Rotary position embeddings
+- No positional scheme
+> RoPE applies position-dependent rotations to queries and keys in each attention layer.
+
+Q: The purpose of the [CLS] token in BERT-style encoders is to [E]
+- mark the end of the sequence
+* provide a position whose final representation is used as a summary for classification
+- separate two sentences
+- replace masked words
+> A classifier head is attached to the final hidden state of [CLS]; [SEP] separates segments and [MASK] marks positions to predict.
+
+Q: Attention masks are implemented by [M]
+- deleting rows from the key matrix
+* adding a large negative number (or -inf) to disallowed positions' scores before the softmax
+- multiplying the output by zero after the softmax only
+- changing the positional encoding
+> After the softmax those positions get (near) zero weight while the rest renormalize to sum to one.
+
+Q: A Transformer language model has vocabulary size V and width d, with tied input and output embeddings. The embedding parameters number [M]
+- 2 V d
+* V d
+- V + d
+- V^2
+> Tying means the same V x d matrix is used for the input lookup and the output projection.
+
+Q: SwiGLU feed-forward layers, used in several recent LLMs, [H]
+- remove the non-linearity
+* gate one linear projection with the Swish/SiLU of another, typically with a hidden size reduced to about 2/3 of 4d to keep the parameter count
+- replace attention
+- are applied only to the first token
+> FFN(x) = W2 (SiLU(W1 x) * W3 x). Three matrices are used, so the hidden width is scaled down to match the original budget.
+
+Q: Why do Transformers need a learning-rate warmup more than CNNs typically do? [M]
+- They have fewer parameters
+* Early in training attention and adaptive-optimizer statistics are unstable, and large steps can drive the model into a bad regime
+- They use ReLU
+- They have no normalization
+> Warmup keeps updates small while Adam's second-moment estimates settle and the residual stream scale stabilizes; post-norm models are especially sensitive.
+
+Q: Sliding-window or local attention reduces cost by [M]
+- shortening the vocabulary
+* letting each token attend only to a fixed-size neighbourhood, giving cost linear in sequence length
+- removing the feed-forward layers
+- using half-precision floats
+> Longformer and similar models combine local windows with a few global tokens; receptive field grows with depth.
+
+Q: The logit lens (projecting intermediate residual-stream states through the unembedding matrix) is a tool for [H]
+- speeding up inference
+* inspecting what next-token prediction intermediate layers already encode
+- compressing models
+- generating adversarial prompts
+> Because all layers write into the same residual space, decoding intermediate states often shows predictions refining across layers.
+
+Q: The masked language modeling objective of BERT masks about [M]
+- 1% of tokens
+* 15% of tokens
+- 50% of tokens
+- 90% of tokens
+> Of the selected 15%, 80% are replaced by [MASK], 10% by a random token and 10% left unchanged, to reduce the pretrain/fine-tune mismatch.
+
+Q: Mixture-of-experts (MoE) Transformer layers [H]
+- average the outputs of all experts for every token
+* route each token to a small subset of expert feed-forward networks, increasing parameters without proportional compute
+- replace attention with experts
+- need no gating network
+> A router picks the top-k experts per token, so capacity grows while per-token FLOPs stay roughly constant; load balancing losses prevent expert collapse.

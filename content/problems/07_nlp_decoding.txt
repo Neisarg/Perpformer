@@ -1,0 +1,602 @@
+# topic: NLP & Decoding
+# id: nlp
+# subtopics: Greedy decoding and beam search; Temperature, top-k and top-p sampling; Byte-pair encoding; Perplexity; TF-IDF; Edit distance and word error rate
+
+=== greedy-decode | Greedy Decoding | Easy
+--- description
+Implement `greedy_decode(model, ids, max_new_tokens, eos_id=None)`.
+
+- `model(ids)` takes token ids of shape `(1, T)` and returns logits of shape `(1, T, V)`
+- repeatedly take the argmax of the logits at the last position and append it to `ids`
+- stop after `max_new_tokens` tokens, or right after appending `eos_id` (the EOS token is included in the output)
+
+Return the full sequence as a `(1, T + n)` integer tensor. Run the model under `torch.no_grad()`.
+--- starter
+import torch
+
+
+def greedy_decode(model, ids: torch.Tensor, max_new_tokens: int, eos_id=None) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def greedy_decode(model, ids: torch.Tensor, max_new_tokens: int, eos_id=None) -> torch.Tensor:
+    with torch.no_grad():
+        for _ in range(max_new_tokens):
+            logits = model(ids)
+            next_id = logits[:, -1].argmax(dim=-1, keepdim=True)
+            ids = torch.cat([ids, next_id], dim=1)
+            if eos_id is not None and next_id.item() == eos_id:
+                break
+    return ids
+--- tests
+def _counter_model(vocab):
+    def model(ids):
+        nxt = (ids + 1) % vocab
+        return torch.nn.functional.one_hot(nxt, vocab).float() * 10
+    return model
+
+def test_counts_up():
+    """A model that always predicts last + 1"""
+    out = greedy_decode(_counter_model(10), torch.tensor([[3]]), 4)
+    check_equal(out, torch.tensor([[3, 4, 5, 6, 7]]))
+
+def test_stops_at_eos():
+    """Stops right after generating EOS and keeps it"""
+    out = greedy_decode(_counter_model(10), torch.tensor([[5, 6]]), 10, eos_id=9)
+    check_equal(out, torch.tensor([[5, 6, 7, 8, 9]]))
+
+def test_zero_new_tokens():
+    """max_new_tokens = 0 returns the prompt"""
+    prompt = torch.tensor([[1, 2, 3]])
+    check_equal(greedy_decode(_counter_model(5), prompt, 0), prompt)
+
+def test_uses_last_position_and_wraps():
+    """Only the last position's logits matter; the prompt is preserved"""
+    out = greedy_decode(_counter_model(4), torch.tensor([[0, 0, 3]]), 3)
+    check_equal(out, torch.tensor([[0, 0, 3, 0, 1, 2]]))
+
+def test_real_module():
+    """Works with an nn.Module and matches a manual loop"""
+    emb = torch.nn.Embedding(12, 12)
+    model = lambda ids: emb(ids)
+    ids = torch.tensor([[4]])
+    expected = ids.clone()
+    with torch.no_grad():
+        for _ in range(5):
+            expected = torch.cat([expected, emb(expected)[:, -1].argmax(-1, keepdim=True)], dim=1)
+    check_equal(greedy_decode(model, ids, 5), expected)
+--- hints
+- Each step: logits = model(ids); take logits[:, -1].argmax(-1, keepdim=True); concatenate along dim 1.
+- Check for EOS after appending so the EOS token stays in the output.
+
+=== top-k-filter | Top-k Filtering | Easy
+--- description
+Implement `top_k_filter(logits, k)` for logits of shape `(..., V)`.
+
+Keep the `k` largest logits along the last dimension and set every other entry to `-inf`, so that a following softmax assigns them zero probability. If `k >= V`, return the logits unchanged. Do not modify the input in place.
+--- starter
+import torch
+
+
+def top_k_filter(logits: torch.Tensor, k: int) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def top_k_filter(logits: torch.Tensor, k: int) -> torch.Tensor:
+    if k >= logits.shape[-1]:
+        return logits.clone()
+    kth = logits.topk(k, dim=-1).values[..., -1:]
+    return logits.masked_fill(logits < kth, float("-inf"))
+--- tests
+def test_basic():
+    """Keeps the two largest logits"""
+    out = top_k_filter(torch.tensor([1.0, 3.0, 2.0, 0.5]), 2)
+    inf = float("-inf")
+    check_equal(torch.isinf(out), torch.tensor([True, False, False, True]), name="masked positions")
+    check_close(out[1:3], [3.0, 2.0])
+
+def test_batch():
+    """Filters each row independently"""
+    logits = torch.randn(4, 20)
+    out = top_k_filter(logits, 5)
+    check_equal((~torch.isinf(out)).sum(-1), torch.full((4,), 5), name="kept per row")
+    kept = ~torch.isinf(out)
+    check_close(out[kept], logits[kept], name="kept values")
+    check_true(bool((logits[kept].view(4, 5).min(-1).values >= logits.masked_fill(kept, -1e9).max(-1).values).all()), "kept logits must be the largest ones")
+
+def test_k_ge_vocab():
+    """k >= V leaves everything in place"""
+    logits = torch.randn(2, 6)
+    check_close(top_k_filter(logits, 6), logits)
+    check_close(top_k_filter(logits, 100), logits)
+
+def test_k_one_and_no_mutation():
+    """k = 1 keeps only the argmax, and the input is not modified"""
+    logits = torch.tensor([[0.1, 0.9, 0.3]])
+    before = logits.clone()
+    out = top_k_filter(logits, 1)
+    check_close(torch.softmax(out, -1), [[0.0, 1.0, 0.0]])
+    check_equal(logits, before, name="input logits")
+--- hints
+- The k-th largest value is topk(k).values[..., -1:]; mask everything strictly below it.
+
+=== top-p-filter | Top-p (Nucleus) Filtering | Medium
+--- description
+Implement `top_p_filter(logits, p)` for logits of shape `(V,)` or `(B, V)`.
+
+Sort tokens by probability (descending). Keep the smallest prefix whose cumulative probability reaches `p`: a token is removed when the cumulative probability of the tokens before it is already `>= p`. The most likely token is always kept. Removed tokens get a logit of `-inf`; kept tokens keep their original logits, in their original positions.
+--- starter
+import torch
+
+
+def top_p_filter(logits: torch.Tensor, p: float) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def top_p_filter(logits: torch.Tensor, p: float) -> torch.Tensor:
+    sorted_logits, sorted_idx = torch.sort(logits, dim=-1, descending=True)
+    probs = torch.softmax(sorted_logits, dim=-1)
+    cum_before = probs.cumsum(dim=-1) - probs
+    remove_sorted = cum_before >= p
+    remove_sorted[..., 0] = False
+    remove = torch.zeros_like(remove_sorted).scatter(-1, sorted_idx, remove_sorted)
+    return logits.masked_fill(remove, float("-inf"))
+--- tests
+def _kept(logits, p):
+    return (~torch.isinf(top_p_filter(logits, p))).tolist()
+
+def test_sorted_input():
+    """Probabilities 0.5, 0.3, 0.15, 0.05"""
+    logits = torch.log(torch.tensor([0.5, 0.3, 0.15, 0.05]))
+    check_equal(_kept(logits, 0.45), [True, False, False, False], name="p = 0.45")
+    check_equal(_kept(logits, 0.7), [True, True, False, False], name="p = 0.7")
+    check_equal(_kept(logits, 0.9), [True, True, True, False], name="p = 0.9")
+
+def test_unsorted_input():
+    """Kept tokens stay at their original positions"""
+    logits = torch.log(torch.tensor([0.05, 0.5, 0.15, 0.3]))
+    out = top_p_filter(logits, 0.7)
+    check_equal((~torch.isinf(out)).tolist(), [False, True, False, True], name="kept mask")
+    check_close(out[1], logits[1], name="kept logit value")
+
+def test_always_keeps_top_token():
+    """Even a tiny p keeps the most likely token"""
+    logits = torch.tensor([0.0, 5.0, 1.0])
+    check_equal(_kept(logits, 1e-6), [False, True, False])
+
+def test_batch_and_full():
+    """Works per row, and p = 1 keeps everything"""
+    logits = torch.log(torch.tensor([[0.6, 0.3, 0.1], [0.2, 0.2, 0.6]]))
+    out = top_p_filter(logits, 0.55)
+    check_equal((~torch.isinf(out)).tolist(), [[True, False, False], [False, False, True]], name="kept mask")
+    check_equal(_kept(torch.randn(2, 7), 1.0), [[True] * 7] * 2, name="p = 1")
+--- hints
+- Work in sorted order: cumulative probability before each token = cumsum - prob.
+- scatter the removal mask back to the original token positions with the sort indices.
+
+=== sample-next-token | Temperature Sampling | Medium
+--- description
+Implement `sample_next_token(logits, temperature=1.0, top_k=None, generator=None)`.
+
+- `logits`: `(B, V)`
+- if `temperature == 0`, return the argmax of each row (greedy)
+- otherwise divide the logits by `temperature`; if `top_k` is given keep only the `top_k` largest logits per row; then sample one token per row from the softmax distribution with `torch.multinomial`, passing `generator` through
+
+Return an integer tensor of shape `(B,)`.
+--- starter
+import torch
+
+
+def sample_next_token(logits: torch.Tensor, temperature: float = 1.0, top_k=None, generator=None) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def sample_next_token(logits: torch.Tensor, temperature: float = 1.0, top_k=None, generator=None) -> torch.Tensor:
+    if temperature == 0:
+        return logits.argmax(dim=-1)
+    logits = logits / temperature
+    if top_k is not None and top_k < logits.shape[-1]:
+        kth = logits.topk(top_k, dim=-1).values[..., -1:]
+        logits = logits.masked_fill(logits < kth, float("-inf"))
+    probs = torch.softmax(logits, dim=-1)
+    return torch.multinomial(probs, num_samples=1, generator=generator).squeeze(-1)
+--- tests
+def test_greedy():
+    """temperature = 0 is the argmax"""
+    logits = torch.randn(6, 9)
+    out = sample_next_token(logits, temperature=0)
+    check_equal(out, logits.argmax(-1))
+
+def test_distribution():
+    """Empirical frequencies follow softmax(logits / T)"""
+    g = torch.Generator().manual_seed(0)
+    logits = torch.tensor([[2.0, 1.0, 0.0, -1.0]]).repeat(40000, 1)
+    out = sample_next_token(logits, temperature=2.0, generator=g)
+    check_shape(out, (40000,))
+    freq = torch.bincount(out, minlength=4).float() / 40000
+    check_close(freq, torch.softmax(torch.tensor([2.0, 1.0, 0.0, -1.0]) / 2.0, dim=0), tol=0.015, name="sample frequencies")
+
+def test_top_k():
+    """With top_k = 2 only the two best tokens are ever sampled"""
+    g = torch.Generator().manual_seed(1)
+    logits = torch.tensor([[0.0, 3.0, 2.9, 2.8, -1.0]]).repeat(5000, 1)
+    out = sample_next_token(logits, temperature=1.0, top_k=2, generator=g)
+    check_true(set(out.tolist()) == {1, 2}, "sampled tokens outside the top 2: %s" % sorted(set(out.tolist())))
+
+def test_low_temperature_is_peaked():
+    """A very low temperature almost always returns the argmax"""
+    g = torch.Generator().manual_seed(2)
+    logits = torch.tensor([[1.0, 1.5, 0.5]]).repeat(2000, 1)
+    out = sample_next_token(logits, temperature=0.01, generator=g)
+    check_true((out == 1).float().mean() > 0.999, "low temperature should be nearly deterministic")
+--- hints
+- Handle temperature == 0 first with argmax.
+- Scale, optionally mask all but the top-k logits, softmax, then torch.multinomial(probs, 1, generator=generator).
+
+=== beam-search | Beam Search | Hard
+--- description
+Implement `beam_search(log_prob_fn, start_id, beam_width, max_len, eos_id)`.
+
+- `log_prob_fn(seq)` takes a list of token ids and returns a 1-D tensor of next-token log-probabilities of size `V`
+- start with one hypothesis `[start_id]` with score 0
+- at each step, extend every unfinished hypothesis with every token, adding the token's log-probability to its score; hypotheses that already end in `eos_id` are carried over unchanged
+- keep the `beam_width` highest-scoring hypotheses
+- stop when every kept hypothesis ends in `eos_id`, or after `max_len` steps
+
+Return `(best_sequence, best_score)`: the highest-scoring hypothesis as a list of ints (including `start_id`) and its total log-probability as a float. No length normalization.
+--- starter
+import torch
+
+
+def beam_search(log_prob_fn, start_id: int, beam_width: int, max_len: int, eos_id: int):
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def beam_search(log_prob_fn, start_id: int, beam_width: int, max_len: int, eos_id: int):
+    beams = [([start_id], 0.0)]
+    for _ in range(max_len):
+        if all(seq[-1] == eos_id and len(seq) > 1 for seq, _ in beams):
+            break
+        candidates = []
+        for seq, score in beams:
+            if len(seq) > 1 and seq[-1] == eos_id:
+                candidates.append((seq, score))
+                continue
+            log_probs = log_prob_fn(seq)
+            for tok in range(log_probs.shape[0]):
+                candidates.append((seq + [tok], score + log_probs[tok].item()))
+        candidates.sort(key=lambda c: c[1], reverse=True)
+        beams = candidates[:beam_width]
+    best_seq, best_score = max(beams, key=lambda c: c[1])
+    return best_seq, best_score
+--- tests
+def _toy():
+    # tokens: 0 = EOS, 1 = a, 2 = b, 3 = START
+    table = {
+        3: [1e-9, 0.6, 0.4, 1e-9],
+        1: [0.4, 0.3, 0.3, 1e-9],
+        2: [0.9, 0.05, 0.05, 1e-9],
+    }
+    def fn(seq):
+        return torch.log(torch.tensor(table[seq[-1]]))
+    return fn
+
+def test_greedy_width_one():
+    """Beam width 1 is greedy and gets the worse sequence"""
+    seq, score = beam_search(_toy(), 3, 1, 10, 0)
+    check_equal(seq, [3, 1, 0], name="sequence")
+    check_close(score, math.log(0.6 * 0.4), tol=1e-4, name="score")
+
+def test_beam_finds_better_sequence():
+    """Beam width 2 finds the higher-probability sequence"""
+    seq, score = beam_search(_toy(), 3, 2, 10, 0)
+    check_equal(seq, [3, 2, 0], name="sequence")
+    check_close(score, math.log(0.4 * 0.9), tol=1e-4, name="score")
+
+def test_max_len():
+    """Stops after max_len steps even without EOS"""
+    seq, score = beam_search(_toy(), 3, 2, 1, 0)
+    check_equal(seq, [3, 1], name="sequence")
+    check_close(score, math.log(0.6), tol=1e-4, name="score")
+
+def test_finished_beams_are_kept():
+    """A finished hypothesis keeps competing with longer ones"""
+    table = {3: [0.5, 0.5, 1e-9, 1e-9], 1: [0.6, 0.4, 1e-9, 1e-9]}
+    fn = lambda seq: torch.log(torch.tensor(table.get(seq[-1], [0.25, 0.25, 0.25, 0.25])))
+    seq, score = beam_search(fn, 3, 3, 6, 0)
+    check_equal(seq, [3, 0], name="sequence")
+    check_close(score, math.log(0.5), tol=1e-4, name="score")
+
+def test_never_ends():
+    """With no EOS available the best max_len-step hypothesis is returned"""
+    fn = lambda seq: torch.log(torch.tensor([1e-9, 0.7, 0.3]))
+    seq, score = beam_search(fn, 2, 2, 3, 0)
+    check_equal(seq, [2, 1, 1, 1], name="sequence")
+    check_close(score, 3 * math.log(0.7), tol=1e-4, name="score")
+--- hints
+- Keep a list of (sequence, score) pairs. Each step builds all candidates, sorts by score and truncates to the beam width.
+- Finished hypotheses must stay in the candidate pool with their score unchanged.
+
+=== bpe | Byte-Pair Encoding | Hard
+--- description
+Implement the core of BPE tokenizer training and encoding.
+
+`bpe_train(word_freqs, num_merges)`:
+
+- `word_freqs` maps each word to its frequency; every word starts as a sequence of single characters
+- repeat `num_merges` times: count every adjacent symbol pair across all words (weighted by word frequency), choose the most frequent pair (break ties by choosing the lexicographically smallest pair, comparing as Python tuples), and merge every occurrence of it into one symbol (scan left to right, no overlapping merges)
+- stop early if no pairs remain
+- return the list of merged pairs in order, e.g. `[("e", "s"), ("es", "t")]`
+
+`bpe_encode(word, merges)`: split `word` into characters and apply the merges in order; return the list of symbols.
+--- starter
+def bpe_train(word_freqs: dict, num_merges: int) -> list:
+    # TODO
+    pass
+
+
+def bpe_encode(word: str, merges: list) -> list:
+    # TODO
+    pass
+--- solution
+def _merge(symbols, pair):
+    out, i = [], 0
+    while i < len(symbols):
+        if i + 1 < len(symbols) and symbols[i] == pair[0] and symbols[i + 1] == pair[1]:
+            out.append(symbols[i] + symbols[i + 1])
+            i += 2
+        else:
+            out.append(symbols[i])
+            i += 1
+    return out
+
+
+def bpe_train(word_freqs: dict, num_merges: int) -> list:
+    words = {w: list(w) for w in word_freqs}
+    merges = []
+    for _ in range(num_merges):
+        counts = {}
+        for w, symbols in words.items():
+            for a, b in zip(symbols[:-1], symbols[1:]):
+                counts[(a, b)] = counts.get((a, b), 0) + word_freqs[w]
+        if not counts:
+            break
+        best = min(counts, key=lambda p: (-counts[p], p))
+        merges.append(best)
+        words = {w: _merge(s, best) for w, s in words.items()}
+    return merges
+
+
+def bpe_encode(word: str, merges: list) -> list:
+    symbols = list(word)
+    for pair in merges:
+        symbols = _merge(symbols, pair)
+    return symbols
+--- tests
+CORPUS = {"low": 5, "lower": 2, "newest": 6, "widest": 3}
+
+def test_first_merges():
+    """Classic example, including two tie-breaks"""
+    merges = bpe_train(CORPUS, 4)
+    check_equal([tuple(m) for m in merges], [("e", "s"), ("es", "t"), ("l", "o"), ("lo", "w")], name="merges")
+
+def test_fifth_merge_tie():
+    """A three-way tie resolves to the lexicographically smallest pair"""
+    merges = bpe_train(CORPUS, 5)
+    check_equal(tuple(merges[4]), ("e", "w"), name="fifth merge")
+
+def test_encode():
+    """Encoding applies merges in training order"""
+    merges = bpe_train(CORPUS, 4)
+    check_equal(bpe_encode("lowest", merges), ["low", "est"], name='encode("lowest")')
+    check_equal(bpe_encode("slow", merges), ["s", "low"], name='encode("slow")')
+    check_equal(bpe_encode("xyz", merges), ["x", "y", "z"], name='encode("xyz")')
+
+def test_overlapping_pairs():
+    """Merges scan left to right without overlapping"""
+    merges = bpe_train({"aaa": 1}, 1)
+    check_equal([tuple(m) for m in merges], [("a", "a")], name="merges")
+    check_equal(bpe_encode("aaaaa", merges), ["aa", "aa", "a"], name='encode("aaaaa")')
+
+def test_stops_when_no_pairs():
+    """Training stops early when every word is a single symbol"""
+    merges = bpe_train({"ab": 3}, 10)
+    check_equal([tuple(m) for m in merges], [("a", "b")], name="merges")
+    check_equal(bpe_encode("", merges), [], name="encode of the empty string")
+--- hints
+- Represent each word as a list of symbols and write one helper that merges a pair in a list.
+- min(counts, key=lambda p: (-counts[p], p)) picks the most frequent pair with lexicographic tie-breaking.
+
+=== perplexity | Perplexity | Easy
+--- description
+Implement `perplexity(logits, targets, pad_id=None)`.
+
+- `logits`: `(N, V)`, `targets`: `(N,)` token ids
+- perplexity is `exp` of the mean negative log-likelihood of the targets
+- if `pad_id` is given, positions whose target equals `pad_id` are excluded from the mean
+
+Return a Python float.
+--- starter
+import torch
+import torch.nn.functional as F
+
+
+def perplexity(logits: torch.Tensor, targets: torch.Tensor, pad_id=None) -> float:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn.functional as F
+
+
+def perplexity(logits: torch.Tensor, targets: torch.Tensor, pad_id=None) -> float:
+    nll = F.cross_entropy(logits, targets, reduction="none")
+    if pad_id is not None:
+        nll = nll[targets != pad_id]
+    return torch.exp(nll.mean()).item()
+--- tests
+def test_uniform():
+    """A uniform model over V tokens has perplexity V"""
+    check_close(perplexity(torch.zeros(5, 50), torch.randint(0, 50, (5,))), 50.0, tol=1e-3)
+
+def test_perfect():
+    """A confident correct model has perplexity 1"""
+    targets = torch.tensor([2, 0, 1])
+    logits = torch.nn.functional.one_hot(targets, 4).float() * 50
+    check_close(perplexity(logits, targets), 1.0)
+
+def test_matches_definition():
+    """exp of the mean negative log-likelihood"""
+    logits, targets = torch.randn(30, 11), torch.randint(0, 11, (30,))
+    expected = math.exp(torch.nn.functional.cross_entropy(logits, targets).item())
+    check_close(perplexity(logits, targets), expected, tol=1e-3)
+
+def test_padding():
+    """Padded positions are excluded"""
+    logits = torch.randn(6, 8)
+    targets = torch.tensor([3, 0, 5, 0, 0, 1])
+    keep = targets != 0
+    expected = math.exp(torch.nn.functional.cross_entropy(logits[keep], targets[keep]).item())
+    check_close(perplexity(logits, targets, pad_id=0), expected, tol=1e-3)
+--- hints
+- Get per-token losses with F.cross_entropy(..., reduction='none').
+- Select the non-pad positions before averaging, then exponentiate.
+
+=== tf-idf | TF-IDF Matrix | Medium
+--- description
+Implement `tfidf(docs)` where `docs` is a list of tokenized documents (lists of strings).
+
+- the vocabulary is every distinct token, sorted alphabetically
+- `tf(t, d)` = count of `t` in `d` divided by the number of tokens in `d` (0 for an empty document)
+- `idf(t)` = `ln(N / df(t))` with `N` the number of documents and `df(t)` the number of documents containing `t`
+
+Return `(matrix, vocab)`: a float tensor of shape `(N, V)` with `tf * idf`, and the vocabulary list.
+--- starter
+import math
+import torch
+
+
+def tfidf(docs: list):
+    # TODO
+    pass
+--- solution
+import math
+import torch
+
+
+def tfidf(docs: list):
+    vocab = sorted({t for d in docs for t in d})
+    index = {t: i for i, t in enumerate(vocab)}
+    n = len(docs)
+    tf = torch.zeros(n, len(vocab))
+    for i, d in enumerate(docs):
+        for t in d:
+            tf[i, index[t]] += 1.0
+        if len(d) > 0:
+            tf[i] /= len(d)
+    df = (tf > 0).sum(dim=0).float()
+    idf = torch.log(n / df)
+    return tf * idf, vocab
+--- tests
+def test_small_example():
+    """Two documents"""
+    m, vocab = tfidf([["a", "b", "a"], ["b", "c"]])
+    check_equal(vocab, ["a", "b", "c"], name="vocab")
+    check_close(m, [[(2 / 3) * math.log(2), 0.0, 0.0], [0.0, 0.0, 0.5 * math.log(2)]])
+
+def test_common_token_is_zero():
+    """A token present in every document has zero weight"""
+    m, vocab = tfidf([["the", "cat"], ["the", "dog"], ["the", "the", "bird"]])
+    check_close(m[:, vocab.index("the")], torch.zeros(3))
+    check_close(m[2, vocab.index("bird")], (1 / 3) * math.log(3))
+
+def test_empty_document():
+    """An empty document gives a zero row"""
+    m, vocab = tfidf([["x", "y"], []])
+    check_shape(m, (2, 2))
+    check_close(m[1], torch.zeros(2))
+    check_close(m[0], [0.5 * math.log(2), 0.5 * math.log(2)])
+
+def test_vocab_sorted():
+    """Columns follow the alphabetically sorted vocabulary"""
+    m, vocab = tfidf([["zebra", "apple"], ["mango"]])
+    check_equal(vocab, ["apple", "mango", "zebra"], name="vocab")
+    check_close(m[1], [0.0, math.log(2), 0.0])
+--- hints
+- Sort the vocabulary and map each token to a column index.
+- Count per document, divide by the document length, then multiply by log(N / df).
+
+=== edit-distance | Edit Distance and Word Error Rate | Medium
+--- description
+Implement two functions.
+
+`edit_distance(a, b)`: the Levenshtein distance between two sequences (strings or lists): the minimum number of insertions, deletions and substitutions that turn `a` into `b`.
+
+`wer(reference, hypothesis)`: word error rate for two strings, defined as the edit distance between their whitespace-separated word lists divided by the number of reference words. The reference has at least one word.
+--- starter
+def edit_distance(a, b) -> int:
+    # TODO
+    pass
+
+
+def wer(reference: str, hypothesis: str) -> float:
+    # TODO
+    pass
+--- solution
+def edit_distance(a, b) -> int:
+    prev = list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+        prev = cur
+    return prev[len(b)]
+
+
+def wer(reference: str, hypothesis: str) -> float:
+    ref, hyp = reference.split(), hypothesis.split()
+    return edit_distance(ref, hyp) / len(ref)
+--- tests
+def test_classic():
+    """kitten -> sitting needs 3 edits"""
+    check_equal(edit_distance("kitten", "sitting"), 3)
+    check_equal(edit_distance("flaw", "lawn"), 2)
+
+def test_empty_and_identical():
+    """Empty strings and identical strings"""
+    check_equal(edit_distance("", ""), 0)
+    check_equal(edit_distance("abc", ""), 3)
+    check_equal(edit_distance("", "abcd"), 4)
+    check_equal(edit_distance("same", "same"), 0)
+
+def test_lists():
+    """Works on lists of tokens"""
+    check_equal(edit_distance(["a", "b", "c"], ["a", "x", "c", "d"]), 2)
+
+def test_wer():
+    """One substitution and one deletion over six reference words"""
+    check_close(wer("the cat sat on the mat", "the cat sit on mat"), 2 / 6)
+    check_close(wer("hello world", "hello world"), 0.0)
+
+def test_wer_above_one():
+    """Many insertions can push WER above 1"""
+    check_close(wer("hi", "well hi there my friend"), 4.0)
+--- hints
+- dp[i][j] = edit distance between a[:i] and b[:j]; the first row and column are 0..n.
+- dp[i][j] = min(dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + (a[i-1] != b[j-1])).

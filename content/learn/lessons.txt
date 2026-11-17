@@ -1,0 +1,653 @@
+# Lessons for the Learn section. One module per multiple-choice topic.
+#   @ topic-id | requires: comma-separated prerequisite topic ids
+#   ! one-line summary of the module
+#   = concept title
+#   ? predict question, then options ("*" marks the answer), then "> explanation"
+
+@ linalg | requires:
+! Vectors, matrices and decompositions: the language every model is written in.
+= Rank tells you what a matrix can and cannot do
+? A 100 x 3 data matrix has rank 2. What does that say about its three features?
+- All three carry independent information
+* One feature is a linear combination of the other two
+- The matrix is invertible
+> Rank is the number of independent directions. Rank 2 with 3 columns means one column is redundant, X^T X is singular, and least squares has infinitely many solutions unless you regularize. Whenever a model "has no unique solution", look for a rank deficiency.
+= Eigenvalues and singular values measure stretching
+? A symmetric matrix has eigenvalues 10 and 0.01. What does gradient descent on the quadratic it defines look like?
+- Fast in every direction
+* Fast along one direction and very slow along the other
+- It diverges for every step size
+> Eigenvectors are directions the matrix only rescales; eigenvalues are the scale factors. Their ratio (the condition number, here 1000) governs how lopsided the loss surface is, which is why ill-conditioned problems need momentum, preconditioning or normalization. Singular values generalize this to any matrix: sigma_i^2 are the eigenvalues of A^T A.
+= SVD gives the best low-rank summary
+? You keep only the 5 largest singular values of a 1000 x 1000 matrix. What do you get?
+- A random approximation
+* The closest rank-5 matrix in Frobenius norm
+- The 5 largest entries
+> A = U S V^T, and truncating to the top k singular values is provably the best rank-k approximation (Eckart-Young). PCA, LoRA, latent semantic analysis and matrix-factorization recommenders are all this idea: most of the action lives in a few directions.
+= Matrix calculus in three identities
+? What is the gradient of ||Xw - y||^2 with respect to w?
+* 2 X^T (Xw - y)
+- 2 (Xw - y)
+- X^T X
+> Three results cover most derivations: d(a^T w)/dw = a, d(w^T A w)/dw = (A + A^T) w, and the chain rule through a linear map multiplies by its transpose. Setting 2 X^T (Xw - y) = 0 gives the normal equations; the same transpose pattern is what backpropagation does layer by layer.
+
+@ prob | requires:
+! Reasoning under uncertainty: Bayes, estimation, tests and information.
+= Bayes' rule and base rates
+? A test is 99% accurate and the condition affects 1 in 1000 people. You test positive. Roughly how likely is it that you have it?
+- About 99%
+- About 50%
+* Under 10%
+> Posterior = likelihood x prior / evidence. Among 1000 people there is about 1 true positive and about 10 false positives, so a positive result is right roughly 9% of the time. Rare classes make even accurate classifiers produce mostly false alarms, which is the precision problem of imbalanced data.
+= Maximum likelihood, and MAP as regularization
+? Adding an L2 penalty to a regression loss corresponds to which probabilistic assumption?
+* A Gaussian prior on the weights
+- Gaussian noise on the inputs
+- A uniform prior on the weights
+> MLE picks parameters that make the data most probable; with Gaussian noise that is least squares, with categorical outputs it is cross-entropy. MAP multiplies by a prior: a Gaussian prior gives L2, a Laplace prior gives L1. Most loss functions are a negative log-likelihood plus a negative log-prior.
+= What a p-value is and is not
+? A p-value of 0.03 means...
+- there is a 3% chance the null hypothesis is true
+* data this extreme would appear 3% of the time if the null were true
+- the effect is large
+> A p-value is P(data at least this extreme | H0). It is not the probability of the hypothesis, and it says nothing about effect size. Run 20 tests at alpha = 0.05 and you expect one false positive, so correct for multiple comparisons and decide the sample size before looking.
+= Entropy, cross-entropy and KL
+? Minimizing cross-entropy between data and model is the same as minimizing what?
+* KL(data || model)
+- KL(model || data)
+- The entropy of the model
+> H(P, Q) = H(P) + KL(P || Q), and H(P) is fixed by the data. So maximum likelihood is forward-KL minimization: the model must cover everything the data does. KL is asymmetric and never negative; perplexity is just exp of the cross-entropy.
+
+@ optim | requires: linalg
+! How models are fitted: gradient descent and everything built on it.
+= The learning rate is bounded by curvature
+? For a quadratic bowl whose steepest curvature is L, when does gradient descent diverge?
+- Never
+* When the step size exceeds 2 / L
+- When the step size is below 1 / L
+> Each step multiplies the error along an eigen-direction by (1 - lr * lambda). That stays below 1 in magnitude only if lr < 2 / lambda_max, so the sharpest direction limits the step while flat directions crawl. This one fact explains warmup, normalization layers and adaptive optimizers.
+= Momentum and Adam
+? Roughly how big is one Adam step for a parameter whose gradient is consistently 1000?
+- About 1000 x lr
+* About lr
+- About lr / 1000
+> Momentum averages gradients so consistent directions accelerate and oscillations cancel. Adam also divides by the running root-mean-square gradient, so each parameter moves about lr per step regardless of gradient scale. Bias correction fixes the zero-initialized averages early on.
+= AdamW and schedules
+? Why is weight decay "decoupled" in AdamW?
+- To make training faster
+* So the decay is not rescaled by Adam's per-parameter normalization
+- To remove the learning rate
+> With L2 inside the loss, Adam divides the decay term by sqrt(v), so parameters with large gradients barely decay. AdamW shrinks weights directly. Pair it with warmup (early Adam statistics are unreliable) and a decay schedule such as cosine.
+= Saddles, noise and batch size
+? In very high dimensions, most critical points with high loss are...
+- poor local minima
+* saddle points
+- global minima
+> For a random critical point to be a minimum, every one of millions of curvature directions must point up, which is unlikely unless the loss is already low. SGD noise (proportional to lr / batch size) escapes saddles and favours flatter minima, which is why batch size and learning rate are scaled together.
+
+@ linear | requires: linalg, prob, optim
+! Linear and logistic regression: the baseline for everything else.
+= Least squares is a Gaussian likelihood
+? Which noise assumption makes mean absolute error the maximum-likelihood loss?
+- Gaussian
+* Laplace
+- Uniform
+> Squared error is the negative log-likelihood under Gaussian noise; absolute error under Laplace noise. Choosing a loss is choosing a noise model, which is why heavy-tailed targets call for Huber or absolute error.
+= Ridge shrinks, lasso selects
+? Two features are identical copies. What does lasso tend to do?
+- Give both the same weight
+* Keep one and zero the other
+- Fail to converge
+> L2 adds lam * I to X^T X: every weight shrinks smoothly and correlated features share the weight. L1's constant-magnitude pull drives small weights exactly to zero, giving sparse models but arbitrary choices among correlated features. Standardize features first, because penalties depend on scale.
+= Logistic regression models log-odds
+? In logistic regression a coefficient of 0.7 means a one-unit increase in that feature...
+- adds 0.7 to the probability
+* multiplies the odds by about 2
+- multiplies the probability by 0.7
+> log(p / (1 - p)) = w^T x + b, so coefficients add on the log-odds scale and exp(w) is an odds ratio. With cross-entropy the gradient on the logit is simply p - y, with no vanishing-gradient factor, which is why it is preferred to squared error for classification.
+
+@ trees | requires: prob
+! Decision trees and the ensembles that dominate tabular data.
+= How a tree chooses a split
+? Which transformation of a feature changes the tree that gets built?
+- Taking its logarithm
+- Standardizing it
+* Neither: trees only use the ordering of values
+> A split is chosen to maximize the drop in impurity (Gini or entropy for classes, variance for regression). Only the order of feature values matters, so monotonic rescaling has no effect, and trees handle mixed scales without preprocessing. Fully grown trees have low bias and high variance.
+= Bagging reduces variance, boosting reduces bias
+? Why does a random forest sample a subset of features at each split?
+* To decorrelate the trees so averaging helps more
+- To make each tree more accurate
+- To reduce memory
+> Averaging n models with correlation rho leaves variance rho * sigma^2 no matter how large n is, so forests fight correlation with bootstrap samples and feature subsampling. Boosting instead adds shallow trees sequentially, each fitted to the current errors.
+= Gradient boosting fits gradients
+? With squared error, what does each new tree in gradient boosting predict?
+- The original target
+* The residual of the current ensemble
+- A random target
+> Each stage fits the negative gradient of the loss with respect to the current prediction, which for squared error is the residual. Shrinkage (a small learning rate), subsampling, depth limits and early stopping regularize. XGBoost uses second-order information; LightGBM bins features into histograms for speed.
+
+@ classical | requires: linalg, prob, linear
+! Margins, kernels, neighbours and generative classifiers.
+= The margin and the support vectors
+? In an SVM, which training points determine the decision boundary?
+- All of them equally
+* Only those on or inside the margin
+- The class means
+> An SVM maximizes the distance to the closest points; hinge loss is zero for anything beyond the margin, so only the support vectors matter. C trades margin width against violations: a large C fits harder.
+= The kernel trick
+? What does a kernel function compute?
+* An inner product in a feature space, without building the features
+- The distance to the nearest neighbour
+- A probability
+> The SVM dual touches data only through inner products, so swapping in k(x, x') gives a non-linear boundary at the cost of an n x n Gram matrix. With an RBF kernel, gamma sets how local each point's influence is: too large memorizes, too small underfits.
+= Neighbours and the curse of dimensionality
+? In 1000 dimensions, the nearest and farthest neighbour of a random point are...
+* almost equally far away
+- very different in distance
+- always identical
+> kNN's k trades bias for variance, but in high dimensions distances concentrate and "nearest" stops meaning "similar". That is why retrieval uses learned embeddings rather than raw features. Naive Bayes sidesteps the problem by assuming features are independent given the class.
+
+@ unsup | requires: linalg, prob
+! Finding structure without labels: clustering and dimensionality reduction.
+= k-means and its assumptions
+? k-means is run twice with different random starts and gives different clusters. Why?
+- It is buggy
+* It only finds a local optimum of the within-cluster variance
+- The data changed
+> Lloyd's algorithm alternates assignments and mean updates; each step lowers the within-cluster sum of squares, so it converges, but to a local optimum. It assumes roughly spherical, similar-sized clusters. k-means++ seeding and multiple restarts help.
+= Mixtures and EM
+? What does the E-step of EM compute for a Gaussian mixture?
+- New means
+* The probability that each component generated each point
+- The number of clusters
+> A GMM is a soft, elliptical k-means. The E-step computes responsibilities; the M-step re-estimates weights, means and covariances with them. Each iteration cannot decrease the likelihood. Shrink the covariances to zero and you recover k-means.
+= PCA finds directions of variance
+? You run PCA on features in metres and millimetres without scaling. What dominates the first component?
+* The feature with the largest numeric variance
+- The most informative feature
+- Nothing in particular
+> PCA projects onto the top eigenvectors of the covariance matrix (the right singular vectors of the centred data). It is purely variance-driven, so standardize first. t-SNE and UMAP preserve local neighbourhoods for visualization but distort global distances.
+
+@ general | requires: linear
+! Why models that fit the training set fail, and what to do about it.
+= Bias, variance and what the curves tell you
+? Training accuracy 99%, validation 70%. Which fix is most likely to help?
+- A bigger model
+* More data or stronger regularization
+- Training longer
+> A large train-validation gap is variance; high error on both is bias. More data, regularization, augmentation and early stopping attack variance; capacity and better features attack bias. Read the learning curves before changing anything.
+= Leakage is the most common evaluation bug
+? You standardize with statistics of the full dataset, then split. What is wrong?
+- Nothing
+* Test-set information leaked into training
+- The model will underfit
+> Anything fitted on data (scalers, encoders, feature selection, target encodings) must be fitted on the training fold only. Other leaks: features that are consequences of the label, duplicates across splits, random splits of time series, and the same user in both splits.
+= Regularizers in deep learning
+? Why does early stopping act like weight decay?
+* Both limit how far weights move from their starting point
+- Both add noise
+- Both reduce the learning rate
+> Weight decay, dropout, augmentation, label smoothing and early stopping all restrict the effective capacity in different ways. Modern over-parameterized networks can still generalize (double descent), so regularization is tuned empirically on validation data.
+
+@ eval | requires: prob, general
+! Choosing metrics that match the decision, and trusting experiments.
+= Precision, recall and the threshold
+? Lowering a classifier's decision threshold generally does what?
+* Raises recall and lowers precision
+- Raises both
+- Lowers both
+> Precision is TP / predicted positives; recall is TP / actual positives. The threshold moves you along the trade-off, so pick it from costs. With rare positives accuracy is useless and PR curves are more informative than ROC.
+= Ranking versus calibration
+? A model's scores are all squared. Which metric changes?
+- ROC AUC
+* Log loss
+- Neither
+> AUC depends only on the ordering of scores: it is the probability that a random positive outranks a random negative. Log loss and Brier score also care whether 0.8 really means 80%. If scores feed an auction, a threshold or a human decision, check calibration.
+= A/B tests: power and peeking
+? You check an A/B test every day and stop the first time p < 0.05. What happens to the false-positive rate?
+- It stays at 5%
+* It rises well above 5%
+- It falls
+> Sample size is set by the minimum effect you care about (halving it needs four times the data). Repeated peeking, many metrics and many segments all inflate false positives. Randomize by the unit whose experience must be consistent, and use guardrail metrics.
+
+@ nn | requires: linalg, optim
+! What a neural network computes and how gradients reach every weight.
+= Without non-linearities, depth is an illusion
+? Ten linear layers with no activation function are equivalent to...
+* one linear layer
+- a decision tree
+- a ten-layer network with ReLU
+> A composition of affine maps is affine. The activation function is what lets depth build features; ReLU became the default because its gradient is exactly 1 on the active side, so signals do not shrink layer after layer the way they do through sigmoids.
+= Backpropagation is the chain rule with reuse
+? A tensor feeds two different later operations. What is its gradient?
+- The gradient from the last use
+* The sum of the gradients from both uses
+- The product of the two
+> Reverse-mode differentiation walks the graph from the loss backwards, multiplying by each local Jacobian's transpose and summing over paths. One backward pass yields all gradients at about the cost of a forward pass, in exchange for storing activations.
+= Initialization keeps the signal alive
+? Why does He initialization use variance 2 / fan_in for ReLU layers?
+* ReLU zeroes half the signal, so the 2 restores the variance
+- Because 2 is the number of layers
+- To make weights sparse
+> If each layer scales activation variance by a factor different from 1, the signal explodes or vanishes exponentially with depth. Xavier (1 / fan) suits tanh; He (2 / fan_in) suits ReLU. Identical initial weights never break symmetry, so initialization must be random.
+
+@ blocks | requires: nn
+! The reusable parts of modern architectures and why each one exists.
+= Normalization layers differ only in the axes they average over
+? Which normalization gives the same result for an example regardless of what else is in the batch?
+- BatchNorm in training mode
+* LayerNorm
+- Neither
+> For (N, C, H, W): BatchNorm averages over (N, H, W) per channel, LayerNorm over (C, H, W) per example, InstanceNorm over (H, W), GroupNorm over groups of channels. Batch statistics make BatchNorm fast for CNNs but fragile with small batches and sequences, so Transformers use LayerNorm or RMSNorm, which drops the mean subtraction.
+= Skip connections give gradients a highway
+? A residual block computes y = x + F(x). What is dy/dx?
+- The Jacobian of F
+* The identity plus the Jacobian of F
+- Zero
+> The identity term means gradients reach early layers undiminished, so blocks only need to learn a correction. ResNets add; DenseNets and U-Nets concatenate to reuse or restore features. Pre-norm keeps the skip path clean, which is why deep Transformers place the norm inside the branch.
+= Order has to be injected
+? Self-attention with no positional information treats its input as...
+* a set: shuffling tokens just shuffles the outputs
+- a sequence
+- an image
+> Options: add sinusoidal or learned absolute embeddings at the input; add a relative bias to attention scores (T5, ALiBi); or rotate queries and keys by a position-dependent angle (RoPE) so dot products depend on the offset. Relative schemes generalize better across lengths.
+= Gates and conditioning
+? How does a diffusion U-Net know which noise level it is denoising?
+- It guesses from the image
+* A timestep embedding is injected into every block
+- A separate network per step
+> Multiplicative interactions let one signal control another: LSTM gates, squeeze-and-excitation channel weights, FiLM scale-and-shift, and cross-attention from image features to text tokens are all conditioning mechanisms. Timestep and class embeddings usually enter by modulating normalization.
+= Readouts turn many vectors into one
+? Why can a network with global average pooling accept images of different sizes?
+* Averaging over positions gives a fixed-size vector whatever the resolution
+- It resizes the image first
+- It cannot
+> Pooling over space, a [CLS] token, or attention pooling all summarize a variable-size set of features. For sets and graphs the readout must be permutation-invariant (sum, mean, max), which is also the rule for message aggregation in GNNs.
+
+@ training | requires: nn, general, blocks
+! Getting deep networks to train: recipes, diagnostics and transfer.
+= Sanity checks before long runs
+? A 10-class classifier's very first loss is 6.9. What does that suggest?
+- Everything is fine
+* Something is off: uniform predictions would give about 2.3
+- The learning rate is too low
+> Know what "right" looks like: initial loss about ln(C), the ability to overfit one batch to zero, and a loss that falls at a sensible learning rate. Most training failures are bugs in data, labels or modes (forgetting model.eval()), not modeling problems.
+= Reading failures from the curves
+? The loss becomes NaN after 200 steps. What do you try first?
+* A lower learning rate, warmup and gradient clipping
+- A deeper model
+- More data
+> Divergence is a step-size problem; a plateau from the start suggests a bug or dead units; a widening train-validation gap is overfitting. Tune the learning rate first, on a log scale. Gradient accumulation emulates large batches when memory is short.
+= Transfer learning
+? You have 2,000 labeled images similar to ImageNet. What is the sensible plan?
+- Train from scratch
+* Start from a pretrained model and fine-tune the head, perhaps with a small learning rate elsewhere
+- Use only the last layer of a random network
+> Pretrained features cut the label requirement by orders of magnitude. With little data, freeze or lightly tune early layers; with more data, fine-tune everything. Distillation transfers knowledge from a large teacher to a small student through softened outputs.
+
+@ vision | requires: training
+! Convolutions, detection and the move to Transformers.
+= Convolution arithmetic and receptive field
+? Two stacked 3 x 3 convolutions see the same area as one convolution of what size?
+- 3 x 3
+* 5 x 5
+- 9 x 9
+> Output size is floor((n + 2p - k) / s) + 1 and each 3 x 3 layer grows the receptive field by 2. Weight sharing gives translation equivariance and few parameters; 1 x 1 convolutions mix channels; depthwise-separable convolutions cut cost for mobile models.
+= Detection: boxes, IoU and NMS
+? Why is non-maximum suppression needed after a detector's forward pass?
+* Many overlapping boxes fire for the same object
+- To speed up training
+- To resize the image
+> Detectors score thousands of candidate boxes. IoU measures overlap; NMS keeps the best box and removes others that overlap it too much; mAP averages precision over recall levels, classes and IoU thresholds.
+= ViT and CLIP
+? Why do Vision Transformers need more data than CNNs when trained from scratch?
+- They have fewer parameters
+* They lack built-in locality and translation equivariance
+- They cannot use GPUs
+> A ViT cuts an image into patches, embeds them and runs a Transformer; it must learn what convolutions assume. Large-scale pretraining fixes that: masked autoencoding for vision alone, or CLIP's contrastive image-text alignment, which enables zero-shot classification.
+
+@ seq | requires: training
+! From recurrent networks to attention.
+= Why RNNs forget
+? In a vanilla RNN, the gradient from 100 steps ago has been multiplied by what?
+* The recurrent Jacobian about 100 times
+- Nothing
+- The learning rate
+> Repeated multiplication makes gradients vanish or explode with distance. LSTMs add a cell state updated additively and guarded by gates, so information and gradients can persist; GRUs do the same with fewer gates. Clipping handles explosions.
+= Attention removes the bottleneck
+? What problem did attention originally solve in translation models?
+- Slow training
+* Squeezing a whole sentence into one fixed vector
+- Large vocabularies
+> Instead of one summary vector, the decoder looks back at every encoder state and takes a weighted average chosen by relevance. Self-attention applies the same idea within a sequence: every token gathers information from every other in one step.
+= Scaled dot-product attention
+? Why are attention scores divided by sqrt(d)?
+* To keep the softmax out of its saturated, tiny-gradient regime
+- To normalize the output length
+- To save memory
+> softmax(Q K^T / sqrt(d)) V. Dot products of d-dimensional vectors grow like sqrt(d), so the scaling keeps logits moderate. Masks set forbidden scores to -inf: a causal mask hides the future, a padding mask hides empty positions. Cost is quadratic in length.
+
+@ transformer | requires: seq, blocks
+! Inside the architecture behind modern language models.
+= One block: mix, then transform
+? In a Transformer block, which sub-layer moves information between positions?
+* Self-attention
+- The feed-forward network
+- The normalization
+> Each block has attention (communication between tokens) and an MLP (computation at each token), both written additively into a shared residual stream. The MLP holds about two thirds of the parameters. Blocks are pre-norm in almost all modern models.
+= Encoders, decoders and what they are for
+? Which family is trained to predict the next token with a causal mask?
+- BERT
+* GPT
+- The encoder half of T5
+> Encoder-only models see both directions and suit classification and embeddings. Decoder-only models train on every position in parallel thanks to the causal mask and generate text. Encoder-decoder models add cross-attention from the output to the encoded input.
+= Position in modern LLMs
+? What does RoPE change compared with adding position embeddings to the input?
+* It rotates queries and keys in every layer so scores depend on relative offset
+- It removes attention
+- It adds a bias to the output
+> RoPE applies a position-dependent rotation to pairs of query/key dimensions; the dot product then depends only on the distance between tokens. ALiBi instead subtracts a penalty proportional to distance. Both extrapolate to longer contexts better than learned absolute embeddings.
+= Why generation is cheap per token: the KV cache
+? Without a KV cache, generating token 1000 requires recomputing what?
+- Nothing
+* Keys and values for all 999 earlier tokens in every layer
+- Only the embedding
+> Past keys and values never change under a causal mask, so they are stored and each new token only computes its own query. Memory grows with layers x heads x length, which motivates grouped-query attention (several query heads share one KV head) and FlashAttention's memory-efficient kernels.
+
+@ nlp | requires: prob, nn
+! Text as numbers: tokens, embeddings and classic retrieval.
+= Subword tokenization
+? How does BPE handle a word it has never seen?
+- It maps it to an unknown token
+* It splits it into known subword pieces
+- It skips it
+> BPE repeatedly merges the most frequent adjacent pair, so common words become single tokens and rare ones decompose. That gives an open vocabulary of manageable size, and explains why models struggle with character-level tasks: letters are hidden inside tokens.
+= Embeddings and the distributional idea
+? What is the main limitation of word2vec-style embeddings?
+* One vector per word regardless of context
+- They need labels
+- They are too large
+> Words that appear in similar contexts get similar vectors. Static embeddings conflate senses ("bank"); contextual models compute a vector per occurrence. For sentence similarity, encoders are trained contrastively and compared with cosine similarity.
+= Lexical search still matters
+? Why is BM25 often combined with dense retrieval?
+- It is slower
+* It matches exact terms, ids and rare words that embeddings blur
+- It understands paraphrases
+> TF-IDF weights terms by rarity; BM25 adds term-frequency saturation and length normalization. Dense retrieval captures meaning, lexical retrieval captures exact strings, and hybrid search fuses both rankings.
+
+@ llm | requires: transformer, nlp
+! How large language models are trained, steered and grounded.
+= Pretraining: next-token prediction at scale
+? What single objective are GPT-style models pretrained on?
+* Predicting the next token
+- Answering questions
+- Classifying sentiment
+> Predicting the next token on a huge corpus forces the model to pick up grammar, facts and reasoning patterns. Capability scales predictably with parameters, data and compute; the model is then adapted with instruction tuning and preference-based post-training.
+= Decoding is a product decision
+? What does lowering the temperature toward 0 do?
+* Makes sampling approach greedy, deterministic decoding
+- Makes outputs more random
+- Changes the model's weights
+> Temperature rescales logits; top-k keeps a fixed number of candidates; top-p keeps the smallest set covering probability p. Low temperature suits extraction and code, higher suits brainstorming. Constrained decoding masks tokens that would break a schema, guaranteeing valid JSON.
+= Context is the model's working memory
+? A model answers a question about your company's latest policy incorrectly. What is the most direct fix?
+- A higher temperature
+* Retrieve the policy and put it in the context
+- A larger model
+> Anything not in the weights must be in the context window: instructions, examples, retrieved documents, tool results. RAG retrieves relevant chunks (dense, lexical or hybrid, often reranked) and grounds the answer in them. Long contexts cost money and attention, so keep them focused.
+= Post-training: from predictor to assistant
+? How does DPO differ from classic RLHF with PPO?
+- It needs no data
+* It trains directly on preference pairs without a separate reward model or rollouts
+- It only changes the tokenizer
+> SFT teaches the response format from demonstrations. Preference methods then optimize for what people (or verifiers) prefer: RLHF trains a reward model and runs PPO with a KL leash; DPO turns the same objective into a simple loss on preferred versus rejected answers; GRPO and RL with verifiable rewards train reasoning on checkable tasks.
+= Reasoning and its limits
+? Why does asking a model to reason step by step help on multi-step problems?
+* The written steps act as a scratchpad the model can condition on
+- It makes the model larger
+- It lowers the temperature
+> A Transformer does fixed computation per token, so intermediate tokens are extra serial computation. Reasoning models spend a budget of thinking tokens before answering. Fluent text is still not verified text: hallucinations call for grounding, citations and checks, and untrusted content can carry injected instructions.
+
+@ efficient | requires: llm
+! Making large models cheaper to adapt, store and serve.
+= LoRA: train a low-rank update
+? In LoRA with rank 8 on a 4096 x 4096 matrix, about what fraction of that matrix's parameters is trained?
+- 50%
+- 10%
+* Under 1%
+> Freeze W and learn W + (alpha / r) B A with B (d x r) and A (r x k). B starts at zero so training begins from the pretrained function, and the update can be merged afterwards for zero inference cost. Variants: QLoRA trains adapters over a 4-bit base, DoRA separates magnitude from direction, rsLoRA fixes the scaling at high rank.
+= Quantization: fewer bits per weight
+? A 7B-parameter model in 4-bit precision needs roughly how much memory for weights?
+* 3.5 GB
+- 14 GB
+- 28 GB
+> Uniform quantization maps reals to integers with a scale and zero point; per-channel scales and outlier handling keep the error down. Post-training methods (GPTQ, AWQ) need only calibration data; quantization-aware training uses a straight-through estimator to adapt weights to rounding.
+= Pruning and distillation
+? Why does unstructured pruning often fail to speed up inference on a GPU?
+* Scattered zeros still require dense matrix kernels
+- It removes too many layers
+- It changes the tokenizer
+> Removing individual weights gives sparsity that standard hardware cannot exploit; structured pruning removes whole heads, channels or layers. Distillation trains a small student on a large teacher's softened outputs and is how many small, fast models are made.
+= Faster decoding without changing the answer
+? In speculative decoding, who has the final say on each token?
+- The draft model
+* The large target model, which verifies the draft's proposals
+- Neither
+> A small model drafts several tokens and the large model checks them in one parallel pass, accepting with probability min(1, p / q) so the output distribution is exactly the target's. Add KV caching, continuous batching and prompt caching and you have the core of a modern serving stack.
+= Serving metrics
+? What mostly determines time to first token?
+* Queueing plus the prefill pass over the prompt
+- The output length
+- The sampling temperature
+> Prefill processes the prompt in parallel; decoding then emits tokens one at a time. Track time to first token, tokens per second, throughput and cost per request. Batching raises throughput at the price of latency; shorter or cached prompts cut the first-token delay.
+
+@ agents | requires: llm
+! Systems in which the model decides what to do next.
+= Workflow or agent?
+? A task always consists of the same three known steps. What should you build?
+* A fixed workflow of prompts
+- A fully autonomous agent
+- A multi-agent system
+> An agent is a model running in a loop: decide, call a tool, read the result, repeat until done. That flexibility costs latency, money and reliability, so use plain code for predictable paths and agents when the steps cannot be known in advance.
+= Tools are the agent's hands
+? When the model "calls a function", what actually executes it?
+- The model's weights
+* The host application, which returns the result as a message
+- The tokenizer
+> The model emits a structured request (name plus JSON arguments); the harness runs it and appends the result. Tool names, descriptions and schemas are prompts: unclear ones cause wrong calls. Results should be concise and errors should say how to recover. MCP standardizes how tools are exposed.
+= Context engineering and memory
+? Why does an agent that has run for 200 steps start making odd mistakes?
+- Its weights have changed
+* Its context is full of stale tool output and the relevant details are crowded out
+- The tools are tired
+> Context is finite and attention degrades as it fills. Long-running agents compact history, clear old tool results, keep notes in files, and delegate sub-tasks to sub-agents with fresh contexts that return summaries.
+= Errors compound
+? Each step succeeds 95% of the time and the task needs 20 steps. What is the overall success rate?
+- 95%
+* About 36%
+- About 75%
+> 0.95^20 is roughly 0.36. Long tasks need verification against ground truth (tests, re-reading sources), checkpoints, retries and idempotent tools. Agents also tend to report success too readily, so have something independent check the result.
+= Security: assume the content is hostile
+? An agent can read your email, browse the web and send messages. What is the risk?
+* A web page can inject instructions that make it leak your email
+- It will run slowly
+- It cannot use tools
+> Models cannot reliably tell data from instructions. Private data plus untrusted content plus an outbound channel is the dangerous combination. Enforce limits outside the model: least-privilege tools, sandboxes, and human approval for irreversible actions.
+
+@ llmeval | requires: eval, llm, agents
+! Measuring language models and agents in a way you can trust.
+= Why classic metrics fall short
+? A summary is correct but phrased differently from the reference. What happens to its ROUGE score?
+* It is low, although the summary is good
+- It is perfect
+- It is unaffected
+> N-gram overlap punishes valid paraphrases and rewards copying. Exact match works only for short canonical answers, and perplexity measures prediction, not helpfulness. Open-ended outputs need rubric-based grading by people or by a judge model.
+= LLM judges need judging
+? Before trusting an LLM judge, what should you measure?
+- Its speed
+* Its agreement with human labels, and its biases
+- Its parameter count
+> Judges are biased by answer position, length and resemblance to their own style. Use specific criteria, ask for reasoning before the verdict, prefer binary or coarse scales, swap the order in pairwise comparisons, and calibrate against human ratings.
+= Evaluating RAG in two halves
+? An answer is fully supported by the retrieved passages but wrong. Which component failed?
+* Retrieval: the right evidence was not fetched
+- Generation
+- The tokenizer
+> Score retrieval (recall@k, precision of the context) separately from generation (faithfulness to the context, correctness against the truth). The split tells you whether to fix the index and chunking or the prompt and model.
+= Evaluating agents: outcomes and reliability
+? Why grade an agent on the final state rather than on matching a reference sequence of steps?
+* Many different valid paths reach the goal
+- Steps cannot be logged
+- It is cheaper to guess
+> Check what matters: tests pass, the database holds the right record. Run every task several times, since agents are stochastic: pass@k asks whether any attempt worked, pass^k whether all did. Track cost, latency and unsafe actions alongside success.
+= Statistical honesty
+? On 200 questions model A scores 71% and model B 68%. What can you conclude?
+- A is better
+* Not much yet: the gap is within noise
+- B is better
+> The standard error of 70% on 200 items is about 3 points. Report confidence intervals, compare models on the same items with a paired test, watch for benchmark contamination, and keep a regression suite that should stay near 100% separate from capability evals that should not.
+
+@ genmodels | requires: prob, training
+! Models that generate: VAEs, GANs, diffusion and flows.
+= VAEs: a bound you can optimize
+? What are the two terms of the VAE objective?
+* Reconstruction and a KL term toward the prior
+- A generator and a discriminator loss
+- Two reconstruction terms
+> The ELBO trades reconstruction quality against keeping the encoder's distribution near the prior. The reparameterization trick, z = mu + sigma * eps, makes sampling differentiable. A too-strong decoder can ignore z entirely (posterior collapse).
+= GANs: a two-player game
+? What is mode collapse?
+* The generator produces only a few kinds of output
+- The discriminator stops training
+- Training runs out of memory
+> A generator tries to fool a discriminator. Samples are sharp, but the game is unstable and can settle on a few convincing modes. Wasserstein losses and gradient penalties stabilize it. GANs survive mostly as fast decoders and for perceptual losses.
+= Diffusion: learn to denoise
+? What does the network predict in standard DDPM training?
+- The clean image directly from pure noise
+* The noise that was added to the image
+- A class label
+> Data is noised by a fixed schedule; x_t = sqrt(abar) x_0 + sqrt(1 - abar) eps can be sampled in one shot, and the network regresses eps with a plain MSE loss. Sampling reverses the process step by step; DDIM and distillation cut the number of steps; latent diffusion works in a compressed space.
+= Guidance and flow matching
+? What does raising the classifier-free guidance scale do?
+* Follows the prompt more closely at the cost of diversity
+- Speeds up sampling
+- Removes the need for a prompt
+> One network is trained with the condition randomly dropped; at sampling time the conditional prediction is extrapolated away from the unconditional one. Flow matching replaces the noise schedule with straight paths from noise to data and regresses a velocity, which makes few-step sampling easier.
+
+@ rl | requires: prob, nn
+! Learning from rewards rather than labels.
+= Returns, values and Bellman
+? With gamma = 0.9 and a reward of 1 at every step forever, what is the return?
+- 1
+* 10
+- Infinite
+> The return is the discounted sum of rewards, 1 / (1 - gamma) here. A value function is the expected return; the Bellman equation writes it as immediate reward plus the discounted value of the next state, which lets values be learned by bootstrapping.
+= Q-learning and its stabilizers
+? Why does DQN keep a separate target network?
+* So the bootstrapped targets do not shift with every update
+- To explore more
+- To store experience
+> Q-learning regresses Q(s, a) toward r + gamma * max Q(s', .). With neural networks this chases a moving target and samples are correlated, so DQN adds a slowly updated target network and a replay buffer. Function approximation, bootstrapping and off-policy data together are the unstable combination.
+= Policy gradients and PPO
+? Subtracting a baseline from the return in REINFORCE does what?
+* Lowers variance without adding bias
+- Adds bias
+- Changes the optimal policy
+> The policy gradient is E[grad log pi(a|s) x advantage]. Advantage estimates from a critic (GAE interpolates between one-step and Monte Carlo) cut variance. PPO limits each update by clipping the probability ratio, which is why it is the default workhorse.
+
+@ recsys | requires: linear, nn, eval
+! Retrieval and ranking systems at scale.
+= The funnel: retrieve, then rank
+? Why not score every item with the best model for every request?
+* It is far too slow for millions of items
+- It would be less accurate
+- Items lack features
+> Candidate generation cheaply narrows millions of items to hundreds, optimizing recall; a heavier ranker orders them with rich features; a re-ranker applies diversity and business rules. Each stage has its own metric.
+= Two towers and negatives
+? In a two-tower model, when do the user and item representations interact?
+- At every layer
+* Only in a final dot product
+- Never
+> Late interaction lets item embeddings be precomputed and searched with an approximate nearest-neighbour index. Training needs negatives: in-batch negatives are cheap but over-penalize popular items, which a logQ correction fixes.
+= Bias in logged data
+? Why can't you train a ranker naively on click logs?
+* Users click what was shown and what was ranked high, regardless of relevance
+- Clicks are too rare
+- Logs are too large
+> Position bias, selection bias and feedback loops mean the logs reflect the old system as much as user taste. Remedies: propensity weighting, position features used only in training, exploration, and judging success with online experiments.
+
+@ mlsys | requires: eval, general
+! Designing, shipping and operating ML systems.
+= Start from the decision, not the model
+? What should you establish first in an ML system design interview?
+* The goal, constraints and success metrics
+- The architecture
+- The GPU type
+> Clarify what decision the model supports, the scale, the latency budget and how success is measured offline and online. Then data and labels, a baseline, the model, serving, monitoring and iteration. A simple baseline shipped beats an elaborate design that is not.
+= Training-serving skew
+? Offline accuracy is excellent; online performance is poor. What do you check first?
+* Whether features are computed the same way, with the same timing, in both places
+- The learning rate
+- The optimizer
+> Skew comes from duplicated feature logic, features that use future information, and different preprocessing. Log features at serving time and train on those, or use a feature store with point-in-time correct joins.
+= Deploy carefully, monitor always
+? What is a canary release?
+- Replacing the old model for everyone at once
+* Sending a small share of traffic to the new model and expanding if metrics hold
+- Running the model only offline
+> Shadow traffic validates stability without user impact; canaries and A/B tests measure effect; rollbacks must be easy. In production, watch input drift, prediction distributions, latency percentiles and delayed-label quality.
+= LLM applications
+? What is the usual first approach when building an LLM feature?
+* Prompting plus retrieval, with an eval set
+- Fine-tuning a model from scratch
+- Training a tokenizer
+> Start with prompts, retrieval and evals; add fine-tuning only when evals show a gap it can close. Control cost with caching, routing easy requests to smaller models and short prompts; add guardrails outside the model for inputs and outputs.
+
+@ pytorch | requires: nn
+! The framework mechanics interviewers expect you to know cold.
+= The training step
+? What happens if you never call optimizer.zero_grad()?
+* Gradients from every step keep adding up
+- Nothing changes
+- Training stops
+> zero_grad, forward, loss, backward, step. backward() accumulates into .grad, which is a feature when you want gradient accumulation and a bug otherwise. model.train() and model.eval() switch dropout and BatchNorm; torch.no_grad() only turns off graph building.
+= Shapes, views and broadcasting
+? Adding tensors of shape (3, 1) and (4,) gives which shape?
+- An error
+* (3, 4)
+- (3, 1)
+> Shapes align from the right and size-1 dimensions stretch. Silent broadcasting is a classic bug source (a (N,) target against (N, 1) predictions gives an N x N loss). view needs contiguous memory; reshape copies when it must.
+= Memory and scale
+? What does mixed precision buy you?
+* Roughly half the memory and faster training on modern GPUs
+- Higher accuracy
+- Fewer parameters
+> Autocast runs most operations in 16-bit; loss scaling prevents gradient underflow. Adam stores two extra copies of the parameters. Beyond one GPU: DDP replicates the model and averages gradients, FSDP shards parameters, and gradient checkpointing trades compute for activation memory.
+
+@ frontier | requires: transformer, llm
+! Ideas from recent research that now come up in interviews.
+= Looking inside: superposition and sparse autoencoders
+? Why are individual neurons in a language model hard to interpret?
+* The model packs more features than it has neurons, so each neuron mixes several
+- Neurons are random
+- There are too few of them
+> Sparse features can share dimensions with little interference (superposition). Sparse autoencoders learn an over-complete dictionary that separates them into more interpretable directions, which can then be used to trace circuits or to steer behaviour by adding a direction to the activations.
+= Merging and arithmetic on weights
+? What is a "task vector"?
+* Fine-tuned weights minus pretrained weights
+- The embedding of a task description
+- A gradient
+> Models fine-tuned from one checkpoint stay in a shared low-loss region, so their weight differences can be added to combine skills, scaled, or negated to remove a behaviour. Model soups average such models for free gains.
+= Beyond attention, beyond autoregression
+? What makes state-space models such as Mamba attractive for very long sequences?
+* Cost grows linearly with length
+- They need no training
+- They have no parameters
+> Selective state-space models keep a compressed recurrent state with input-dependent updates. Discrete diffusion language models refine many tokens in parallel. Neither has displaced Transformers, but both are worth being able to discuss.
+= Reliability research
+? What is "evaluation awareness"?
+* A model behaving differently when it recognizes that it is being tested
+- A model that grades itself
+- An automatic benchmark
+> If a model acts one way in tests and another in deployment, evaluations stop predicting behaviour. Related topics: reward hacking, model collapse from training on synthetic data, membership inference, watermarking and unlearning.

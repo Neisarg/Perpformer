@@ -1,0 +1,178 @@
+# topic: SVMs, Kernels, kNN & Naive Bayes
+# id: classical
+# subtopics: Maximum-margin classifiers and hinge loss; Kernel trick and RBF kernels; k-nearest neighbours and the curse of dimensionality; Naive Bayes and generative vs discriminative models; Gaussian processes; LDA and QDA
+
+Q: In a hard-margin SVM, the support vectors are [E]
+- all training points
+* the training points that lie on the margin boundaries
+- the points farthest from the decision boundary
+- the misclassified points only
+> Only the points on the margin have non-zero dual variables and determine the separating hyperplane.
+
+Q: The hinge loss for a label y in {-1, +1} and score f is [E]
+- log(1 + exp(-y f))
+* max(0, 1 - y f)
+- (y - f)^2
+- exp(-y f)
+> Hinge loss is zero for points classified correctly with margin at least 1 and grows linearly otherwise.
+
+Q: In a soft-margin SVM, increasing the parameter C [M]
+- widens the margin and tolerates more violations
+* penalizes margin violations more, giving a narrower margin and lower bias
+- has no effect on the solution
+- makes the kernel linear
+> C trades margin width against violations. Large C fits the training data more tightly (risk of overfitting); small C regularizes more.
+
+Q: The kernel trick allows an SVM to [E]
+- train without labels
+* compute inner products in a high-dimensional feature space without constructing the features explicitly
+- avoid solving an optimization problem
+- handle missing values
+> The dual depends on the data only through inner products, which a kernel function k(x, x') evaluates implicitly.
+
+Q: With an RBF kernel exp(-gamma ||x - x'||^2), a very large gamma tends to cause [M]
+- underfitting, with a nearly linear boundary
+* overfitting, since each training point influences only a tiny neighbourhood
+- numerical overflow
+- the same solution as a linear kernel
+> Large gamma makes the kernel very narrow, so the model can memorize individual points; small gamma gives smooth, almost linear boundaries.
+
+Q: A function k(x, x') is a valid (Mercer) kernel if [M]
+- it is always positive
+* every Gram matrix it produces is symmetric positive semi-definite
+- it is bounded between 0 and 1
+- it is a polynomial
+> Positive semi-definiteness of all Gram matrices guarantees that k corresponds to an inner product in some feature space.
+
+Q: In k-nearest neighbours, increasing k generally [E]
+- lowers bias and raises variance
+* raises bias and lowers variance
+- lowers both bias and variance
+- has no effect on the decision boundary
+> Larger k averages over more neighbours, giving smoother boundaries (more bias, less variance). k = 1 has zero training error and high variance.
+
+Q: The "curse of dimensionality" hurts nearest-neighbour methods because [M]
+- computing distances becomes impossible
+* in high dimensions, distances between points concentrate so nearest and farthest neighbours become nearly equidistant
+- there are too few features
+- labels become noisy
+> As dimension grows, the data become sparse and the contrast between near and far distances vanishes, so neighbourhoods are no longer local.
+
+Q: The "naive" assumption in Naive Bayes is that [E]
+- all classes are equally likely
+* features are conditionally independent given the class
+- features are Gaussian
+- the decision boundary is linear
+> p(x | y) is factorized as a product over features. The assumption is often violated, yet the classifier can still rank classes well.
+
+Q: Laplace (add-one) smoothing in multinomial Naive Bayes is used to [E]
+- speed up training
+* avoid zero probabilities for feature values unseen in a class
+- normalize document length
+- remove stop words
+> Without smoothing, a single unseen word would make the whole class likelihood zero. Smoothing corresponds to a Dirichlet prior.
+
+Q: Which of these is a generative classifier? [M]
+- Logistic regression
+- Support vector machine
+* Gaussian Naive Bayes
+- A decision tree
+> Generative models describe p(x | y) and p(y) and classify with Bayes' rule; discriminative models directly model p(y | x) or a decision function.
+
+Q: Linear discriminant analysis (LDA) assumes that [M]
+- classes have different covariance matrices
+* each class is Gaussian with a covariance matrix shared across classes
+- features are independent
+- the data are not Gaussian
+> A shared covariance makes the quadratic terms cancel, producing linear boundaries. Allowing class-specific covariances gives QDA with quadratic boundaries.
+
+Q: The naive prediction cost of k-nearest neighbours for one query with n training points in d dimensions is [E]
+- O(1)
+- O(log n)
+* O(n d)
+- O(n^2 d)
+> Brute force compares the query with every stored point. KD-trees help in low dimensions; approximate nearest-neighbour indexes are used in high dimensions.
+
+Q: Training a kernel SVM scales poorly with the number of training examples n mainly because [M]
+- the kernel cannot be evaluated on GPUs
+* the kernel (Gram) matrix has n^2 entries and solvers are typically between O(n^2) and O(n^3)
+- the number of features explodes
+- the hinge loss is non-convex
+> Kernel methods are limited by the n x n Gram matrix. Linear SVMs and approximations such as random Fourier features scale to large n.
+
+Q: A Gaussian process regression model returns, for a new input, [M]
+- only a point prediction
+* a Gaussian predictive distribution with a mean and a variance
+- a class label
+- the nearest training target
+> A GP defines a distribution over functions; conditioning on data gives a closed-form Gaussian posterior with predictive uncertainty.
+
+Q: The exact training cost of a Gaussian process with n points is dominated by [H]
+- computing the kernel, O(n)
+* factorizing the n x n kernel matrix, O(n^3)
+- the number of hyper-parameters
+- sampling from the prior
+> Inference requires solving with K + sigma^2 I, usually via a Cholesky factorization that costs O(n^3) time and O(n^2) memory.
+
+Q: Which loss function leads to probabilistic outputs that are directly interpretable as calibrated probabilities (in the ideal case)? [M]
+- Hinge loss
+* Logistic (log) loss
+- 0-1 loss
+- Perceptron loss
+> Log loss is a proper scoring rule, so minimizing it encourages calibrated probability estimates. SVM scores need post-hoc calibration such as Platt scaling.
+
+Q: The perceptron algorithm is guaranteed to converge when [M]
+- the learning rate decays
+* the training data are linearly separable
+- the features are standardized
+- the number of features exceeds the number of examples
+> The perceptron convergence theorem bounds the number of mistakes for separable data; otherwise the updates never settle.
+
+Q: For text classification with bag-of-words features, which Naive Bayes variant is most natural? [E]
+- Gaussian Naive Bayes
+* Multinomial Naive Bayes
+- Kernel density Naive Bayes
+- Naive Bayes with a uniform likelihood
+> Word counts are modeled by a multinomial distribution per class; Bernoulli NB models presence or absence instead.
+
+Q: Why should features be scaled before using kNN or an RBF-kernel SVM? [E]
+- Scaling reduces the number of support vectors to zero
+* Distance computations would otherwise be dominated by features with large numeric ranges
+- These methods require integer inputs
+- Scaling makes the problem convex
+> Both rely on Euclidean distances, so a feature measured in thousands will swamp one measured in fractions unless they are normalized.
+
+Q: The dual formulation of the SVM is preferred over the primal when [H]
+- the number of samples is much larger than the number of features and the kernel is linear
+* a non-linear kernel is used, since the dual depends only on inner products
+- no regularization is desired
+- the data have missing values
+> The dual has one variable per example and accesses data via inner products, enabling kernels. For linear models with huge n, primal solvers are more efficient.
+
+Q: Compared with a discriminative model, a generative classifier typically [H]
+- needs more data to reach its asymptotic error but has a lower asymptotic error
+* reaches its (often higher) asymptotic error with fewer training examples
+- cannot handle missing features
+- never makes independence assumptions
+> Ng and Jordan's analysis of Naive Bayes versus logistic regression: the generative model converges faster, while the discriminative model has lower asymptotic error.
+
+Q: One-vs-rest multi-class classification with K classes trains [E]
+- one classifier
+* K binary classifiers
+- K (K - 1) / 2 binary classifiers
+- K^2 classifiers
+> One-vs-rest fits a classifier per class against all others; one-vs-one fits a classifier for each pair, K(K-1)/2 in total.
+
+Q: The representer theorem implies that the solution of a kernel ridge regression or SVM can be written as [H]
+- a polynomial in the features
+* a weighted sum of kernel functions centred on the training points
+- a single kernel evaluated at the data mean
+- a linear function of the raw inputs
+> For regularized risk minimization in an RKHS, the minimizer has the form f(x) = sum_i alpha_i k(x_i, x).
+
+Q: Random Fourier features are used to [H]
+- initialize neural networks
+* approximate a shift-invariant kernel with an explicit low-dimensional feature map so linear methods can be used
+- compress images
+- compute exact kernel matrices faster
+> By Bochner's theorem, an RBF kernel is the expectation of cos features with random frequencies; sampling them gives z(x) with z(x)^T z(x') approximately k(x, x').

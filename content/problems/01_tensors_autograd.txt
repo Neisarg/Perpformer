@@ -1,0 +1,456 @@
+# topic: Tensor Operations & Autograd
+# id: tensors
+# subtopics: Broadcasting and indexing; Numerically stable reductions; Vectorizing loops; Manual backpropagation; Gradient checking
+
+=== softmax | Numerically Stable Softmax | Easy
+--- description
+Implement `softmax(x, dim)` without calling `torch.softmax`, `F.softmax` or `log_softmax`.
+
+The result must sum to 1 along `dim` and must stay finite for very large or very small logits, so subtract the maximum before exponentiating.
+
+**Example**
+
+```
+softmax(torch.tensor([1., 2., 3.]))  ->  tensor([0.0900, 0.2447, 0.6652])
+```
+--- starter
+import torch
+
+
+def softmax(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
+    # TODO: return the softmax of x along `dim`
+    pass
+--- solution
+import torch
+
+
+def softmax(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
+    x = x - x.max(dim=dim, keepdim=True).values
+    e = torch.exp(x)
+    return e / e.sum(dim=dim, keepdim=True)
+--- tests
+def test_basic():
+    """Matches a hand-computed example"""
+    x = torch.tensor([1.0, 2.0, 3.0])
+    check_close(softmax(x), [0.09003057, 0.24472847, 0.66524096])
+
+def test_matches_torch():
+    """Matches torch.softmax on a random matrix along both dims"""
+    x = torch.randn(4, 6)
+    check_close(softmax(x, dim=-1), torch.softmax(x, dim=-1))
+    check_close(softmax(x, dim=0), torch.softmax(x, dim=0))
+
+def test_large_values():
+    """Stays finite for very large logits"""
+    x = torch.tensor([[1000.0, 1001.0, 1002.0], [-1000.0, 0.0, 1000.0]])
+    out = softmax(x, dim=-1)
+    check_true(torch.isfinite(out).all(), "output contains inf or nan for large inputs")
+    check_close(out, torch.softmax(x, dim=-1))
+--- hints
+- exp(1000) overflows in float32. What happens to the ratio if you subtract the same constant from every logit?
+- Use keepdim=True so the max and the sum broadcast back against x.
+
+=== logsumexp | Log-Sum-Exp | Easy
+--- description
+Implement `logsumexp(x, dim)`, which computes `log(sum(exp(x)))` along `dim` in a numerically stable way. Do not call `torch.logsumexp`.
+
+The reduced dimension is removed from the output (like `keepdim=False`).
+
+Use the identity `logsumexp(x) = m + log(sum(exp(x - m)))` with `m = max(x)`.
+--- starter
+import torch
+
+
+def logsumexp(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def logsumexp(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
+    m = x.max(dim=dim, keepdim=True).values
+    return (m + torch.log(torch.exp(x - m).sum(dim=dim, keepdim=True))).squeeze(dim)
+--- tests
+def test_basic():
+    """log(e^0 + e^0) = log 2"""
+    check_close(logsumexp(torch.zeros(2)), math.log(2.0))
+
+def test_matches_torch():
+    """Matches torch.logsumexp on random input"""
+    x = torch.randn(3, 5, 2)
+    check_close(logsumexp(x, dim=1), torch.logsumexp(x, dim=1))
+    check_close(logsumexp(x, dim=-1), torch.logsumexp(x, dim=-1))
+
+def test_stability():
+    """No overflow for large values"""
+    x = torch.tensor([[1000.0, 1000.0], [-1000.0, -1000.0]])
+    out = logsumexp(x, dim=-1)
+    check_close(out, [1000.0 + math.log(2.0), -1000.0 + math.log(2.0)], tol=1e-3)
+--- hints
+- Factor out the largest term so every exponent is at most 0.
+
+=== pairwise-distances | Pairwise Euclidean Distances | Easy
+--- description
+Given `a` of shape `(n, d)` and `b` of shape `(m, d)`, return the `(n, m)` matrix of Euclidean distances where entry `[i, j]` is `||a[i] - b[j]||`.
+
+Do not use Python loops or `torch.cdist`.
+--- starter
+import torch
+
+
+def pairwise_distances(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    # TODO: use broadcasting
+    pass
+--- solution
+import torch
+
+
+def pairwise_distances(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    diff = a[:, None, :] - b[None, :, :]
+    return diff.pow(2).sum(dim=-1).sqrt()
+--- tests
+def test_basic():
+    """3-4-5 triangle"""
+    a = torch.tensor([[0.0, 0.0], [3.0, 4.0]])
+    b = torch.tensor([[3.0, 4.0], [0.0, 0.0], [3.0, 0.0]])
+    check_close(pairwise_distances(a, b), [[5.0, 0.0, 3.0], [0.0, 5.0, 4.0]], tol=1e-3)
+
+def test_matches_cdist():
+    """Matches torch.cdist on random points"""
+    a, b = torch.randn(7, 5), torch.randn(4, 5)
+    check_close(pairwise_distances(a, b), torch.cdist(a, b), tol=1e-3)
+
+def test_shape():
+    """Output shape is (n, m)"""
+    check_shape(pairwise_distances(torch.randn(2, 3), torch.randn(9, 3)), (2, 9))
+--- hints
+- Insert singleton dimensions so a is (n, 1, d) and b is (1, m, d); their difference broadcasts to (n, m, d).
+- Alternatively expand ||a - b||^2 = ||a||^2 + ||b||^2 - 2 a.b and clamp at zero before the square root.
+
+=== one-hot | One-Hot Encoding | Easy
+--- description
+Implement `one_hot(labels, num_classes)` without `F.one_hot`.
+
+`labels` is an integer tensor of any shape. Return a `float32` tensor of shape `labels.shape + (num_classes,)` with a 1 at the label index and 0 elsewhere.
+--- starter
+import torch
+
+
+def one_hot(labels: torch.Tensor, num_classes: int) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def one_hot(labels: torch.Tensor, num_classes: int) -> torch.Tensor:
+    out = torch.zeros(*labels.shape, num_classes, dtype=torch.float32)
+    out.scatter_(-1, labels.unsqueeze(-1).long(), 1.0)
+    return out
+--- tests
+def test_basic():
+    """1-D labels"""
+    out = one_hot(torch.tensor([0, 2, 1]), 3)
+    check_equal(out, torch.tensor([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]]))
+
+def test_2d_labels():
+    """Works for labels of shape (B, T)"""
+    labels = torch.randint(0, 7, (4, 5))
+    out = one_hot(labels, 7)
+    check_equal(out, torch.nn.functional.one_hot(labels, 7).float())
+
+def test_dtype():
+    """Returns float32"""
+    check_true(one_hot(torch.tensor([1]), 4).dtype == torch.float32, "expected dtype float32")
+--- hints
+- Comparing labels.unsqueeze(-1) with torch.arange(num_classes) broadcasts to the right shape.
+- scatter_ along the last dimension also works.
+
+=== topk-accuracy | Top-k Accuracy | Easy
+--- description
+Implement `topk_accuracy(logits, targets, k)`.
+
+`logits` has shape `(N, C)` and `targets` has shape `(N,)` with class indices. A prediction counts as correct when the target is among the `k` highest-scoring classes. Return the fraction of correct predictions as a Python float.
+--- starter
+import torch
+
+
+def topk_accuracy(logits: torch.Tensor, targets: torch.Tensor, k: int = 1) -> float:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def topk_accuracy(logits: torch.Tensor, targets: torch.Tensor, k: int = 1) -> float:
+    topk = logits.topk(k, dim=-1).indices
+    hit = (topk == targets.unsqueeze(-1)).any(dim=-1)
+    return hit.float().mean().item()
+--- tests
+def _data():
+    logits = torch.tensor([[0.1, 0.9, 0.0], [0.8, 0.15, 0.05], [0.2, 0.3, 0.5]])
+    targets = torch.tensor([1, 2, 1])
+    return logits, targets
+
+def test_top1():
+    """k = 1"""
+    logits, targets = _data()
+    check_close(topk_accuracy(logits, targets, 1), 1 / 3)
+
+def test_top2():
+    """k = 2"""
+    logits, targets = _data()
+    check_close(topk_accuracy(logits, targets, 2), 2 / 3)
+
+def test_topall():
+    """k equal to the number of classes gives 1.0"""
+    logits, targets = _data()
+    check_close(topk_accuracy(logits, targets, 3), 1.0)
+
+def test_random():
+    """Agrees with argmax accuracy for k = 1 on random data"""
+    logits = torch.randn(50, 10)
+    targets = torch.randint(0, 10, (50,))
+    expected = (logits.argmax(-1) == targets).float().mean().item()
+    check_close(topk_accuracy(logits, targets, 1), expected)
+--- hints
+- torch.topk returns values and indices. Compare the indices with targets.unsqueeze(-1).
+
+=== masked-mean | Masked Mean Pooling | Easy
+--- description
+Sequences in a batch are padded to the same length. Implement `masked_mean(x, mask)` that averages only the real (unpadded) positions.
+
+- `x`: `(B, T, D)` token features
+- `mask`: `(B, T)`, 1 or True for real tokens and 0 or False for padding
+- returns `(B, D)`
+
+If a row has no real tokens, return zeros for that row (do not divide by zero).
+--- starter
+import torch
+
+
+def masked_mean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def masked_mean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    m = mask.unsqueeze(-1).to(x.dtype)
+    return (x * m).sum(dim=1) / m.sum(dim=1).clamp(min=1.0)
+--- tests
+def test_basic():
+    """Padding is ignored"""
+    x = torch.tensor([[[1.0, 2.0], [3.0, 4.0], [100.0, 100.0]]])
+    mask = torch.tensor([[1, 1, 0]])
+    check_close(masked_mean(x, mask), [[2.0, 3.0]])
+
+def test_random_bool_mask():
+    """Matches a per-row loop with a boolean mask"""
+    x = torch.randn(4, 6, 3)
+    lengths = [6, 1, 3, 5]
+    mask = torch.zeros(4, 6, dtype=torch.bool)
+    for i, n in enumerate(lengths):
+        mask[i, :n] = True
+    expected = torch.stack([x[i, :n].mean(dim=0) for i, n in enumerate(lengths)])
+    check_close(masked_mean(x, mask), expected)
+
+def test_empty_row():
+    """A fully masked row returns zeros, not nan"""
+    x = torch.randn(2, 3, 4)
+    mask = torch.tensor([[1, 1, 1], [0, 0, 0]])
+    out = masked_mean(x, mask)
+    check_true(torch.isfinite(out).all(), "output contains nan or inf")
+    check_close(out[1], torch.zeros(4))
+--- hints
+- Multiply x by the mask (unsqueezed to (B, T, 1)), sum over T, then divide by the number of real tokens.
+- clamp(min=1) on the count avoids division by zero.
+
+=== numerical-gradient | Gradient Check with Finite Differences | Medium
+--- description
+Implement `numerical_grad(f, x, eps)` that estimates the gradient of a scalar function `f` at `x` using centred differences:
+
+```
+grad[i] = (f(x + eps * e_i) - f(x - eps * e_i)) / (2 * eps)
+```
+
+`x` is a float64 tensor of any shape and `f` maps a tensor of that shape to a scalar tensor. Return a tensor shaped like `x`. Do not use autograd, and do not modify `x`.
+--- starter
+import torch
+
+
+def numerical_grad(f, x: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def numerical_grad(f, x: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+    x = x.clone()
+    grad = torch.zeros_like(x)
+    flat_x = x.view(-1)
+    flat_g = grad.view(-1)
+    for i in range(flat_x.numel()):
+        orig = flat_x[i].item()
+        flat_x[i] = orig + eps
+        plus = float(f(x))
+        flat_x[i] = orig - eps
+        minus = float(f(x))
+        flat_x[i] = orig
+        flat_g[i] = (plus - minus) / (2 * eps)
+    return grad
+--- tests
+def test_quadratic():
+    """Gradient of sum(x^2) is 2x"""
+    x = torch.tensor([1.0, -2.0, 3.0], dtype=torch.float64)
+    check_close(numerical_grad(lambda t: (t ** 2).sum(), x), 2 * x, tol=1e-6)
+
+def test_matches_autograd():
+    """Matches autograd on a non-linear function of a matrix"""
+    x = torch.randn(3, 4, dtype=torch.float64)
+    f = lambda t: (torch.sin(t) * t).sum() + t.prod(dim=1).sum()
+    xa = x.clone().requires_grad_(True)
+    f(xa).backward()
+    check_close(numerical_grad(f, x), xa.grad, tol=1e-6)
+
+def test_input_unchanged():
+    """x is not modified"""
+    x = torch.randn(5, dtype=torch.float64)
+    before = x.clone()
+    numerical_grad(lambda t: t.sum(), x)
+    check_equal(x, before, name="x after the call")
+--- hints
+- Work on a clone of x and perturb one element at a time through a flattened view.
+- Restore the element before moving to the next one.
+
+=== manual-backprop-mlp | Manual Backpropagation for a Two-Layer MLP | Hard
+--- description
+Without autograd, compute the loss and gradients of a two-layer network:
+
+```
+z1   = x @ W1.T + b1          # (N, H)
+h    = relu(z1)
+out  = h @ W2.T + b2          # (N, O)
+loss = mean((out - y) ** 2)   # mean over all N * O elements
+```
+
+Shapes: `x (N, D)`, `y (N, O)`, `W1 (H, D)`, `b1 (H,)`, `W2 (O, H)`, `b2 (O,)`.
+
+Implement `mlp_grads(x, y, W1, b1, W2, b2)` returning `(loss, grads)` where `grads` is a dict with keys `"W1"`, `"b1"`, `"W2"`, `"b2"` holding the gradient of the loss with respect to each parameter. The tests call your function inside `torch.no_grad()`.
+--- starter
+import torch
+
+
+def mlp_grads(x, y, W1, b1, W2, b2):
+    # TODO: forward pass, then backpropagate by hand
+    loss = None
+    grads = {"W1": None, "b1": None, "W2": None, "b2": None}
+    return loss, grads
+--- solution
+import torch
+
+
+def mlp_grads(x, y, W1, b1, W2, b2):
+    z1 = x @ W1.T + b1
+    h = z1.clamp(min=0)
+    out = h @ W2.T + b2
+    diff = out - y
+    loss = (diff ** 2).mean()
+    d_out = 2.0 * diff / diff.numel()
+    d_W2 = d_out.T @ h
+    d_b2 = d_out.sum(dim=0)
+    d_h = d_out @ W2
+    d_z1 = d_h * (z1 > 0).to(d_h.dtype)
+    d_W1 = d_z1.T @ x
+    d_b1 = d_z1.sum(dim=0)
+    return loss, {"W1": d_W1, "b1": d_b1, "W2": d_W2, "b2": d_b2}
+--- tests
+def _setup(n, d, h, o):
+    x, y = torch.randn(n, d, dtype=torch.float64), torch.randn(n, o, dtype=torch.float64)
+    params = {
+        "W1": torch.randn(h, d, dtype=torch.float64), "b1": torch.randn(h, dtype=torch.float64),
+        "W2": torch.randn(o, h, dtype=torch.float64), "b2": torch.randn(o, dtype=torch.float64),
+    }
+    leaf = {k: v.clone().requires_grad_(True) for k, v in params.items()}
+    out = torch.relu(x @ leaf["W1"].T + leaf["b1"]) @ leaf["W2"].T + leaf["b2"]
+    ref_loss = ((out - y) ** 2).mean()
+    ref_loss.backward()
+    return x, y, params, ref_loss.detach(), {k: v.grad for k, v in leaf.items()}
+
+def test_loss():
+    """Loss value matches"""
+    x, y, p, ref_loss, _ = _setup(5, 4, 6, 3)
+    with torch.no_grad():
+        loss, _ = mlp_grads(x, y, p["W1"], p["b1"], p["W2"], p["b2"])
+    check_close(loss, ref_loss, tol=1e-8, name="loss")
+
+def test_output_layer_grads():
+    """Gradients of W2 and b2 match autograd"""
+    x, y, p, _, ref = _setup(5, 4, 6, 3)
+    with torch.no_grad():
+        _, g = mlp_grads(x, y, p["W1"], p["b1"], p["W2"], p["b2"])
+    check_close(g["W2"], ref["W2"], tol=1e-8, name="grad W2")
+    check_close(g["b2"], ref["b2"], tol=1e-8, name="grad b2")
+
+def test_hidden_layer_grads():
+    """Gradients of W1 and b1 match autograd"""
+    x, y, p, _, ref = _setup(8, 3, 7, 2)
+    with torch.no_grad():
+        _, g = mlp_grads(x, y, p["W1"], p["b1"], p["W2"], p["b2"])
+    check_close(g["W1"], ref["W1"], tol=1e-8, name="grad W1")
+    check_close(g["b1"], ref["b1"], tol=1e-8, name="grad b1")
+--- hints
+- Start from d_out = 2 * (out - y) / (N * O).
+- For out = h @ W2.T + b2: dW2 = d_out.T @ h, db2 = d_out.sum(0), dh = d_out @ W2.
+- ReLU passes the gradient only where z1 > 0.
+
+=== sliding-windows | Sliding Windows | Easy
+--- description
+Implement `sliding_windows(x, size, step)` for a 1-D tensor `x`.
+
+Return a 2-D tensor whose rows are the consecutive windows `x[i : i + size]` for `i = 0, step, 2 * step, ...`, keeping only complete windows.
+
+**Example**
+
+```
+sliding_windows(torch.arange(7), size=3, step=2)
+-> [[0, 1, 2], [2, 3, 4], [4, 5, 6]]
+```
+--- starter
+import torch
+
+
+def sliding_windows(x: torch.Tensor, size: int, step: int = 1) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def sliding_windows(x: torch.Tensor, size: int, step: int = 1) -> torch.Tensor:
+    n = (x.shape[0] - size) // step + 1
+    idx = torch.arange(n).unsqueeze(1) * step + torch.arange(size).unsqueeze(0)
+    return x[idx]
+--- tests
+def test_basic():
+    """Example from the description"""
+    out = sliding_windows(torch.arange(7), 3, 2)
+    check_equal(out, torch.tensor([[0, 1, 2], [2, 3, 4], [4, 5, 6]]))
+
+def test_incomplete_window_dropped():
+    """A trailing partial window is dropped"""
+    out = sliding_windows(torch.arange(10), 4, 3)
+    check_equal(out, torch.tensor([[0, 1, 2, 3], [3, 4, 5, 6], [6, 7, 8, 9]]))
+    check_shape(sliding_windows(torch.arange(9), 4, 3), (2, 4))
+
+def test_float_matches_unfold():
+    """Matches Tensor.unfold on random data"""
+    x = torch.randn(23)
+    check_close(sliding_windows(x, 5, 1), x.unfold(0, 5, 1))
+--- hints
+- The number of windows is (len(x) - size) // step + 1.
+- Build an index matrix: window starts (n, 1) plus offsets (1, size), then index x with it.
+

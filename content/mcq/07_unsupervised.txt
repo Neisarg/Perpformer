@@ -1,0 +1,178 @@
+# topic: Unsupervised Learning
+# id: unsup
+# subtopics: k-means and its variants; Gaussian mixtures and EM; Hierarchical and density-based clustering; PCA and the explained variance; t-SNE and UMAP; Autoencoders; Anomaly detection; Cluster evaluation
+
+Q: k-means minimizes [E]
+- the distance between cluster centroids
+* the sum of squared distances from each point to its assigned centroid
+- the number of clusters
+- the negative log-likelihood of a mixture with full covariances
+> The objective is the within-cluster sum of squares (inertia); the assignment and update steps each never increase it.
+
+Q: Lloyd's algorithm for k-means is guaranteed to [M]
+- find the global optimum
+* converge to a local optimum in a finite number of steps
+- produce clusters of equal size
+- be independent of initialization
+> Each step decreases the objective and there are finitely many partitions, so it converges, but only to a local minimum that depends on initialization.
+
+Q: k-means++ improves on random initialization by [M]
+- running k-means several times
+* choosing initial centroids far apart, sampling each with probability proportional to squared distance from the nearest chosen centroid
+- using medians instead of means
+- choosing k automatically
+> Spreading out the initial centres gives an O(log k) approximation guarantee in expectation and usually faster convergence.
+
+Q: Which clustering method can find clusters of arbitrary shape and labels low-density points as noise? [E]
+- k-means
+- Gaussian mixture with spherical covariance
+* DBSCAN
+- PCA
+> DBSCAN grows clusters from dense regions using eps and min_samples, does not require k, and marks sparse points as outliers.
+
+Q: In the EM algorithm for a Gaussian mixture, the E-step computes [M]
+- new means and covariances
+* the posterior responsibilities of each component for each point
+- the number of components
+- the gradient of the log-likelihood
+> The E-step evaluates p(z = k | x_i) under current parameters; the M-step re-estimates weights, means and covariances using those soft assignments.
+
+Q: k-means can be seen as a limiting case of a Gaussian mixture model with [M]
+- full covariance matrices and soft assignments
+* equal spherical covariances whose variance goes to zero, giving hard assignments
+- diagonal covariances and unequal mixing weights
+- a single component
+> As the shared isotropic variance shrinks, responsibilities become one-hot and EM reduces to Lloyd's algorithm.
+
+Q: Each iteration of EM is guaranteed to [M]
+- reach the global maximum of the likelihood
+* not decrease the data log-likelihood
+- decrease the number of components
+- increase the entropy of the responsibilities
+> EM maximizes a lower bound that touches the log-likelihood at the current parameters, so the likelihood is monotonically non-decreasing.
+
+Q: The first principal component is the direction that [E]
+- minimizes the variance of the projected data
+* maximizes the variance of the projected data
+- separates the classes best
+- is parallel to the first feature axis
+> PCA finds orthogonal directions of maximal variance, equivalently minimizing squared reconstruction error.
+
+Q: The fraction of variance explained by the first k principal components is [E]
+- k divided by the number of features
+* the sum of the top k eigenvalues of the covariance matrix divided by the sum of all eigenvalues
+- the largest eigenvalue
+- the determinant of the covariance matrix
+> Each eigenvalue is the variance along its component, and the total variance is the trace of the covariance matrix.
+
+Q: Before applying PCA to features with very different units, you should usually [E]
+- shuffle the features
+* standardize the features
+- one-hot encode them
+- take their absolute values
+> PCA is variance-based, so a feature with a large numeric scale would dominate the components unless the data are standardized.
+
+Q: A linear autoencoder with a k-unit bottleneck trained with squared error learns [M]
+- a random projection
+* the same subspace as the top k principal components
+- a non-linear manifold
+- the identity function exactly
+> The optimal linear encoder/decoder spans the principal subspace, though the individual directions need not be orthogonal or ordered.
+
+Q: t-SNE visualizations should be read with caution because [M]
+- t-SNE is a linear projection
+* distances between clusters and cluster sizes in the embedding are not reliable; mainly local neighbourhoods are preserved
+- it always produces the same output
+- it needs labels
+> t-SNE matches neighbour distributions with a KL objective; global geometry and densities are distorted and results depend on perplexity and seed.
+
+Q: The silhouette score of a point compares [M]
+- its distance to the origin with the cluster radius
+* its mean distance to points in its own cluster with its mean distance to points in the nearest other cluster
+- its label with the predicted cluster
+- the within-cluster variance before and after clustering
+> s = (b - a) / max(a, b), ranging from -1 to 1; values near 1 indicate well-separated, cohesive clusters.
+
+Q: The "elbow method" for choosing k in k-means looks for [E]
+- the k with zero inertia
+* the k after which inertia decreases much more slowly
+- the k with the highest inertia
+- the k equal to the number of features
+> Inertia always decreases with k; the elbow marks diminishing returns. It is a heuristic and often ambiguous.
+
+Q: Agglomerative hierarchical clustering with single linkage merges the two clusters with [M]
+- the smallest distance between their centroids
+* the smallest distance between their closest pair of points
+- the smallest distance between their farthest pair of points
+- the smallest increase in variance
+> Single linkage uses the minimum pairwise distance and tends to produce chained clusters; complete linkage uses the maximum, Ward's the variance increase.
+
+Q: Which is an advantage of a Gaussian mixture model over k-means? [M]
+- It always converges faster
+* It gives soft assignments and can model elliptical clusters of different sizes
+- It has no hyper-parameters
+- It is immune to local optima
+> GMMs estimate covariances and mixing weights, so clusters need not be spherical or equally sized, and each point gets membership probabilities.
+
+Q: BIC and AIC are used with mixture models to [M]
+- initialize the means
+* select the number of components by penalizing model complexity
+- compute responsibilities
+- speed up the M-step
+> Likelihood always improves with more components; information criteria add a penalty on the number of parameters to choose a parsimonious model.
+
+Q: An autoencoder is used for anomaly detection by flagging inputs with [E]
+- a small latent norm
+* a high reconstruction error
+- a low reconstruction error
+- a large batch size
+> Trained on normal data, the autoencoder reconstructs typical inputs well; unusual inputs are reconstructed poorly.
+
+Q: Non-negative matrix factorization (NMF) differs from PCA in that [M]
+- it requires labels
+* its factors are constrained to be non-negative, giving additive, parts-based representations
+- it produces orthogonal components
+- it has a closed-form solution via SVD
+> Non-negativity prevents cancellation between components, which often yields interpretable parts (topics, facial parts) at the cost of a non-convex problem.
+
+Q: Kernel PCA extends PCA by [H]
+- adding class labels
+* performing PCA in an implicit feature space defined by a kernel, via the eigendecomposition of the centred Gram matrix
+- using an L1 penalty on the loadings
+- replacing variance with entropy
+> Working with the n x n kernel matrix captures non-linear structure without computing the feature map explicitly.
+
+Q: k-means struggles most with which kind of data? [M]
+- Well-separated spherical clusters of similar size
+* Elongated or non-convex clusters with very different densities
+- Low-dimensional data
+- Data with exactly k distinct points
+> Assigning to the nearest centroid assumes roughly isotropic clusters of similar scale; rings, crescents and uneven densities violate this.
+
+Q: The time complexity of one iteration of Lloyd's k-means on n points in d dimensions with k clusters is [M]
+- O(n)
+* O(n k d)
+- O(n^2 d)
+- O(k^n)
+> Each point's distance to each centroid is computed, costing O(n k d); the centroid update is O(n d).
+
+Q: UMAP, compared with t-SNE, is generally [M]
+- slower and limited to two dimensions
+* faster, better at preserving some global structure, and usable for general dimensionality reduction
+- a linear technique
+- deterministic regardless of seed
+> UMAP builds a fuzzy neighbour graph and optimizes a cross-entropy between graphs; it scales well and supports embedding into arbitrary dimensions and transforming new points.
+
+Q: Whitening a dataset means transforming it so that [M]
+- all values lie in [0, 1]
+* the features are uncorrelated and each has unit variance
+- every sample has unit norm
+- the mean of each sample is zero
+> Whitening rotates the data to its principal axes and rescales each by 1/sqrt(eigenvalue), giving an identity covariance matrix.
+
+Q: Spectral clustering clusters the data by [H]
+- thresholding the largest singular value
+* running k-means on the leading eigenvectors of a graph Laplacian built from pairwise similarities
+- fitting Gaussians in the frequency domain
+- hierarchically merging the closest points
+> The eigenvectors of the Laplacian embed the similarity graph so that weakly connected groups separate, which handles non-convex clusters.

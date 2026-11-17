@@ -1,0 +1,178 @@
+# topic: Neural Network Fundamentals
+# id: nn
+# subtopics: Backpropagation and the chain rule; Activation functions; Weight initialization; Vanishing and exploding gradients; Loss functions; Universal approximation; Counting parameters
+
+Q: A fully connected layer maps 512 inputs to 256 outputs with a bias. How many parameters does it have? [E]
+- 131,072
+* 131,328
+- 768
+- 131,584
+> 512 * 256 weights + 256 biases = 131,072 + 256 = 131,328.
+
+Q: Without non-linear activation functions, a deep stack of fully connected layers is equivalent to [E]
+- a decision tree
+* a single linear (affine) layer
+- a convolutional network
+- a kernel machine with an RBF kernel
+> A composition of affine maps is affine, so depth adds no expressive power without non-linearities.
+
+Q: The derivative of the sigmoid function s(x) is [E]
+- 1 - s(x)^2
+* s(x) (1 - s(x))
+- s(x)
+- max(0, x)
+> The sigmoid derivative peaks at 0.25 when x = 0 and vanishes for large |x|. 1 - tanh(x)^2 is the tanh derivative.
+
+Q: Why did ReLU largely replace sigmoid and tanh in hidden layers of deep networks? [E]
+- ReLU is bounded
+* ReLU does not saturate for positive inputs, mitigating vanishing gradients, and is cheap to compute
+- ReLU outputs are zero-centred
+- ReLU is differentiable everywhere
+> The gradient is exactly 1 for positive inputs, so it does not shrink through many layers the way sigmoid derivatives (at most 0.25) do.
+
+Q: The "dying ReLU" problem occurs when [M]
+- gradients explode in deep layers
+* a unit's pre-activation is negative for all inputs, so it outputs zero and receives zero gradient
+- the learning rate is too small
+- ReLU units output values above 1
+> Once stuck in the negative region, the unit cannot recover by gradient descent. Leaky ReLU, careful initialization and lower learning rates help.
+
+Q: Initializing all weights of a multi-layer perceptron to the same constant is a problem because [M]
+- gradients become NaN
+* all hidden units in a layer compute the same function and receive identical updates (symmetry is never broken)
+- the loss becomes non-differentiable
+- the network outputs zero forever
+> Identical units stay identical under gradient descent, so the layer behaves like a single unit. Random initialization breaks the symmetry.
+
+Q: He (Kaiming) initialization sets the weight variance to 2 / fan_in because [M]
+- it makes the weights sparse
+* ReLU zeroes roughly half of the activations, so the factor 2 keeps activation variance constant across layers
+- sigmoid needs larger weights
+- it guarantees convergence to the global minimum
+> For ReLU, E[relu(z)^2] = Var(z) / 2, so doubling the weight variance compared with 1 / fan_in preserves signal magnitude in the forward pass.
+
+Q: Xavier/Glorot initialization uses variance 2 / (fan_in + fan_out) and was derived for [M]
+- ReLU activations
+* activations that are roughly linear around zero, such as tanh
+- convolution kernels only
+- recurrent networks only
+> Glorot and Bengio balanced forward and backward signal variance assuming linear-like (symmetric) activations.
+
+Q: Backpropagation computes [E]
+- the Hessian of the loss
+* gradients of the loss with respect to all parameters by applying the chain rule from outputs to inputs
+- the optimal learning rate
+- numerical gradients using finite differences
+> Reverse-mode automatic differentiation reuses intermediate results, giving all gradients at a cost comparable to a few forward passes.
+
+Q: Reverse-mode automatic differentiation is preferred over forward mode for training neural networks because [M]
+- it needs less memory
+* there are many parameters (inputs) and a single scalar loss (output), so one backward pass yields all gradients
+- it avoids storing activations
+- forward mode cannot handle non-linear functions
+> Reverse mode costs one pass per output; forward mode costs one pass per input. Reverse mode's price is storing the intermediate activations.
+
+Q: For a softmax output with cross-entropy loss, the gradient of the loss with respect to the logits is [M]
+- the one-hot target
+* the predicted probabilities minus the one-hot target
+- the log-probabilities
+- the logits themselves
+> dL/dz = p - y. The simple form is why softmax and cross-entropy are implemented together for numerical stability.
+
+Q: Vanishing gradients in a deep network with sigmoid activations arise mainly because [M]
+- the loss is convex
+* backpropagation multiplies many derivatives that are each at most 0.25, shrinking the signal exponentially with depth
+- the weights are too large
+- biases are initialized to zero
+> The product of small local derivatives (and weights) decays exponentially through layers, so early layers learn very slowly.
+
+Q: The universal approximation theorem says that a feed-forward network with one hidden layer and a suitable non-linearity can [M]
+- learn any function efficiently with gradient descent
+* approximate any continuous function on a compact set arbitrarily well, given enough hidden units
+- represent only linear functions
+- generalize perfectly from finite data
+> It is an existence result about representational capacity; it says nothing about how many units are needed, nor about learnability or generalization.
+
+Q: Which output activation and loss pair is appropriate for multi-label classification (several labels may be true at once)? [M]
+- Softmax with categorical cross-entropy
+* Independent sigmoids with binary cross-entropy per label
+- Linear output with MSE
+- Softmax with hinge loss
+> Softmax forces probabilities to sum to one (exactly one class). Independent sigmoids model each label separately.
+
+Q: GELU, used in BERT and GPT models, can be described as [M]
+- max(0, x)
+* x multiplied by the standard normal CDF of x
+- a piecewise linear function with slope 0.01 for negatives
+- the logistic sigmoid of x
+> GELU(x) = x * Phi(x), a smooth alternative to ReLU that weights inputs by their value rather than gating by sign.
+
+Q: A network outputs logits z. Computing log(softmax(z)) naively can overflow. The stable approach is [M]
+- clipping the logits to [-1, 1]
+* using the log-sum-exp trick: z - (m + log sum exp(z - m)) with m = max(z)
+- adding a small epsilon to z
+- using float16
+> Subtracting the maximum before exponentiating keeps exponents non-positive, avoiding overflow and loss of precision.
+
+Q: Compared with tanh, the sigmoid activation in hidden layers has the additional drawback that [M]
+- it is not monotonic
+* its outputs are not zero-centred, which makes the gradients of the next layer's weights all share the same sign
+- it is unbounded
+- it has no derivative
+> All-positive inputs to a layer force its weight gradients to share a sign per unit, causing inefficient zig-zag updates.
+
+Q: Skip (residual) connections help train very deep networks mainly because they [M]
+- reduce the number of parameters
+* provide identity paths through which gradients flow without attenuation
+- remove the need for non-linearities
+- make every layer linear
+> With y = x + F(x), the gradient includes an identity term, so information and gradients propagate across many layers; blocks only need to learn a residual.
+
+Q: In a computational graph, if a tensor is used in two different downstream operations, its gradient is [M]
+- the gradient from the last operation only
+* the sum of the gradients flowing back from both uses
+- the product of the two gradients
+- the maximum of the two gradients
+> The multivariate chain rule sums contributions over all paths from the tensor to the loss.
+
+Q: Which loss is appropriate for regression when you want to predict a full conditional distribution's quantile, for example the 90th percentile? [H]
+- Mean squared error
+* Pinball (quantile) loss
+- Cross-entropy
+- Hinge loss
+> The pinball loss weights over- and under-predictions asymmetrically (tau and 1 - tau); its minimizer is the tau-th conditional quantile.
+
+Q: A multi-layer perceptron has layers of sizes 10 -> 20 -> 5 with biases. The total number of parameters is [E]
+- 300
+- 305
+* 325
+- 350
+> First layer: 200 weights + 20 biases = 220. Second: 100 weights + 5 biases = 105. Total 325.
+
+Q: Gradient checking compares backprop gradients with [M]
+- gradients from a different optimizer
+* centred finite differences (f(x + h) - f(x - h)) / 2h
+- the Hessian diagonal
+- random noise
+> Centred differences have O(h^2) error and are the standard numerical reference; do the check in double precision.
+
+Q: The softplus function log(1 + exp(x)) is [M]
+- identical to ReLU
+* a smooth approximation of ReLU whose derivative is the sigmoid
+- bounded between 0 and 1
+- an odd function
+> Softplus is strictly positive and differentiable everywhere, with derivative sigmoid(x).
+
+Q: In a mixture-of-experts or gating setup, and in LSTM gates, a sigmoid is used rather than ReLU because [M]
+- it is cheaper to compute
+* its output lies in (0, 1) and can be read as a soft switch or proportion
+- it has larger gradients
+- it is unbounded
+> Gates multiply signals by a value between 0 (block) and 1 (pass), which the sigmoid provides.
+
+Q: For a deep linear network with weight matrices whose singular values are all greater than 1, gradients during backpropagation tend to [H]
+- vanish
+* explode
+- stay constant
+- oscillate in sign only
+> The gradient is multiplied by each layer's transpose; if singular values exceed 1 the norm grows exponentially with depth. Orthogonal initialization keeps them at 1.

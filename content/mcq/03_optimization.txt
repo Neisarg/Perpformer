@@ -1,0 +1,178 @@
+# topic: Optimization
+# id: optim
+# subtopics: Gradient descent and SGD; Momentum and Nesterov; Adaptive methods (RMSProp, Adam, AdamW); Learning-rate schedules and warmup; Convexity, saddle points and curvature; Second-order methods; Batch size and gradient noise
+
+Q: Compared with full-batch gradient descent, mini-batch SGD [E]
+- computes exact gradients more cheaply
+* uses noisy gradient estimates that are much cheaper per update
+- always converges to a better minimum
+- cannot be used with momentum
+> A mini-batch gradient is an unbiased but noisy estimate of the full gradient, giving many cheap updates per pass over the data.
+
+Q: In SGD with momentum, the velocity update v <- mu * v + g primarily [E]
+- normalizes each parameter's gradient by its variance
+* accumulates an exponentially weighted sum of past gradients, damping oscillations
+- decays the weights toward zero
+- computes second derivatives
+> Momentum averages gradients over time: consistent directions build speed while oscillating components cancel.
+
+Q: Adam's bias correction (dividing by 1 - beta^t) exists because [M]
+- gradients are biased estimates of the true gradient
+* the moment estimates are initialized at zero and are biased toward zero early in training
+- the learning rate must decay over time
+- weight decay biases the weights
+> With m_0 = v_0 = 0, the exponential moving averages underestimate the true moments for small t; the correction rescales them.
+
+Q: What distinguishes AdamW from Adam with L2 regularization added to the loss? [M]
+- AdamW uses Nesterov momentum
+- AdamW drops the second-moment estimate
+* AdamW applies weight decay directly to the weights, decoupled from the adaptive gradient scaling
+- AdamW uses a larger epsilon
+> With L2 in the loss, the decay term is divided by sqrt(v), so parameters with large gradients are decayed less. AdamW decouples decay from the adaptive step.
+
+Q: With Adam's default hyper-parameters, the size of an individual parameter's update is roughly bounded by [H]
+- the gradient magnitude
+- the squared gradient
+* the learning rate
+- the weight magnitude
+> The step is lr * m_hat / (sqrt(v_hat) + eps), and |m_hat| / sqrt(v_hat) is about 1 or less, so each step is on the order of lr regardless of gradient scale.
+
+Q: Learning-rate warmup is used with Transformers and adaptive optimizers mainly because [M]
+- it reduces the total number of training steps
+* early updates are unstable: second-moment estimates are unreliable and large steps can cause divergence
+- it prevents overfitting at the end of training
+- it removes the need for weight decay
+> At the start, Adam's variance estimates are based on few samples and the network is far from a stable regime; small initial steps avoid divergence.
+
+Q: For a convex and L-smooth function, gradient descent is guaranteed to decrease the objective at each step if the step size is at most [M]
+- L
+* 1/L
+- 2L
+- sqrt(L)
+> With step size eta <= 1/L the descent lemma gives f(x_next) <= f(x) - (eta/2)||grad||^2. Steps above 2/L can diverge.
+
+Q: In high-dimensional non-convex losses of deep networks, critical points with high loss are most often [M]
+- global minima
+- poor local minima
+* saddle points
+- local maxima
+> For a random critical point in high dimensions it is very unlikely that all Hessian eigenvalues are positive, so most are saddles; gradient noise helps escape them.
+
+Q: Newton's method is rarely used directly to train large neural networks because [E]
+- it needs the loss to be linear
+* forming and inverting the Hessian costs O(n^2) memory and O(n^3) time in the number of parameters
+- it cannot handle more than one layer
+- it requires a batch size of 1
+> With millions or billions of parameters the Hessian is intractable; quasi-Newton or diagonal approximations are used instead.
+
+Q: Gradient clipping by global norm [E]
+- clips each gradient element to [-c, c] independently
+* rescales the whole gradient vector when its norm exceeds a threshold, preserving its direction
+- sets small gradients to zero
+- normalizes every gradient to unit norm at every step
+> If ||g|| > c the gradient is multiplied by c / ||g||. Direction is preserved, unlike element-wise value clipping.
+
+Q: Which optimizer divides the learning rate by the square root of the sum of ALL past squared gradients, causing the effective learning rate to shrink monotonically? [M]
+- RMSProp
+* Adagrad
+- Adam
+- SGD with momentum
+> Adagrad accumulates squared gradients without decay, so its step sizes only shrink. RMSProp and Adam fix this with an exponential moving average.
+
+Q: Which is a convex function of w? [M]
+- The loss of a two-layer ReLU network
+* Logistic regression's negative log-likelihood
+- sin(w)
+- -||w||^2
+> Logistic loss is a composition of a convex function (log-sum-exp) with a linear map. Neural network losses are non-convex in their weights.
+
+Q: Increasing the batch size by a factor k, the "linear scaling rule" suggests [M]
+- dividing the learning rate by k
+* multiplying the learning rate by k
+- leaving the learning rate unchanged
+- squaring the learning rate
+> Larger batches give lower-variance gradients, and k small-batch steps are approximated by one large step with a k-times larger learning rate (usually with warmup).
+
+Q: Cosine annealing of the learning rate [E]
+- increases the learning rate following a cosine up to a maximum
+* decays the learning rate smoothly from its initial value toward a minimum along half a cosine wave
+- oscillates the learning rate between negative and positive values
+- applies only to momentum
+> lr_t = lr_min + 0.5 (lr_max - lr_min)(1 + cos(pi t / T)). It decays slowly at first, fastest in the middle, and gently at the end.
+
+Q: Nesterov momentum differs from classical momentum in that it [M]
+- uses second-order information
+* evaluates the gradient at the look-ahead position after applying the momentum step
+- keeps a per-parameter learning rate
+- resets velocity every epoch
+> Nesterov computes the gradient at theta + mu * v, giving a corrective effect that improves convergence for smooth convex problems.
+
+Q: The gradient noise of mini-batch SGD is often argued to help generalization because it [M]
+* biases optimization toward flatter minima
+- guarantees reaching the global minimum
+- removes the need for regularization
+- makes the loss convex
+> Noise scale grows with lr / batch size; noisy dynamics tend to escape sharp minima, and flat minima are associated empirically with better generalization.
+
+Q: A training loss that oscillates wildly or becomes NaN within the first few hundred steps most likely indicates [E]
+- the model is too small
+* the learning rate is too high
+- the batch size is too large
+- too much weight decay
+> Divergence early in training is the classic symptom of an excessive step size; lower it or add warmup and gradient clipping.
+
+Q: For an ill-conditioned quadratic (very different curvatures along different directions), plain gradient descent [M]
+- converges in one step
+* zig-zags along steep directions and progresses slowly along flat ones
+- converges faster than on a well-conditioned problem
+- cannot converge for any step size
+> The step size is limited by the largest curvature, so progress along low-curvature directions is slow. Momentum and preconditioning address this.
+
+Q: L1 regularization tends to produce sparse solutions because [M]
+- its gradient grows with the weight magnitude
+* its penalty has a constant-magnitude (sub)gradient that pushes small weights exactly to zero
+- it is differentiable everywhere
+- it penalizes large weights more than L2
+> The L1 subgradient has magnitude lambda regardless of weight size, so weights are driven to exactly zero, whereas L2's shrinkage vanishes as weights get small.
+
+Q: In RMSProp, each parameter's update is the gradient divided by [E]
+- the running mean of past gradients
+* the square root of a running average of squared gradients
+- the parameter's current value
+- the Hessian diagonal computed exactly
+> RMSProp normalizes by an exponential moving average of squared gradients, giving a per-parameter adaptive step size.
+
+Q: The Lagrangian dual and KKT conditions are most directly associated with [M]
+- training decision trees
+* constrained optimization, such as the SVM margin problem
+- stochastic gradient descent with momentum
+- batch normalization
+> Constrained problems are analysed with Lagrange multipliers; the SVM dual and its support vectors come from the KKT complementary slackness conditions.
+
+Q: Which statement about second-order information is correct? [H]
+- A large positive Hessian eigenvalue indicates a flat direction
+* The largest Hessian eigenvalue limits the stable learning rate of gradient descent to about 2 / lambda_max
+- Negative Hessian eigenvalues indicate a local minimum
+- The Hessian of a neural network loss is always diagonal
+> For a quadratic, gradient descent is stable only if lr < 2 / lambda_max. Large eigenvalues are sharp directions; negative ones indicate descent directions at a saddle.
+
+Q: Exponential moving averages (EMA) of model weights are kept during training in order to [M]
+- speed up backpropagation
+* evaluate or sample with a smoothed set of weights that often generalizes better
+- reduce GPU memory use
+- replace the optimizer's momentum buffer
+> Averaging iterates reduces noise from the last SGD steps. It is standard in diffusion models and semi-supervised learning.
+
+Q: Which problem does the "one-cycle" or warmup-then-decay schedule address compared with a constant learning rate? [M]
+- It removes the need to shuffle data
+* It allows large learning rates in the middle of training while keeping the start stable and the end fine-grained
+- It guarantees convexity
+- It makes batch normalization unnecessary
+> Small rates at the start avoid divergence, high rates mid-training speed progress and regularize, and low rates at the end let the model settle.
+
+Q: Coordinate descent, proximal gradient and ADMM are optimization methods most relevant when [H]
+- the objective is a deep network trained end to end
+* the objective has non-smooth terms (such as an L1 penalty) or separable structure
+- only zeroth-order information is available
+- the problem has no constraints and is strongly convex and tiny
+> Proximal and splitting methods handle non-differentiable regularizers and constraints; for example, lasso is solved by coordinate descent or ISTA with soft-thresholding.

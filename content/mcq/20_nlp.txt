@@ -1,0 +1,178 @@
+# topic: NLP Fundamentals
+# id: nlp
+# subtopics: Tokenization (BPE, WordPiece, SentencePiece); Word embeddings (word2vec, GloVe); TF-IDF and BM25; Language modeling and smoothing; Decoding strategies; Sentence embeddings and semantic search; Sequence labeling and classification
+
+Q: Byte-pair encoding (BPE) builds its vocabulary by [E]
+- splitting on whitespace only
+* repeatedly merging the most frequent adjacent pair of symbols
+- hashing words into buckets
+- keeping the most frequent whole words
+> Starting from characters (or bytes), each merge adds one new token, so frequent words become single tokens and rare words split into pieces.
+
+Q: The main advantage of subword tokenization over word-level tokenization is [E]
+- shorter sequences in all cases
+* an open vocabulary: any word can be represented as known pieces, avoiding out-of-vocabulary tokens
+- no need for an embedding table
+- exact preservation of grammar
+> Subwords balance vocabulary size against sequence length and handle rare words, typos and morphology.
+
+Q: word2vec's skip-gram model is trained to [E]
+- predict the next sentence
+* predict surrounding context words from a centre word
+- reconstruct a document's topic
+- classify sentiment
+> CBOW does the reverse, predicting the centre word from its context. Both learn embeddings in which words in similar contexts are close.
+
+Q: Negative sampling in word2vec replaces the full softmax with [M]
+- a hierarchical tree
+* a binary classification between the true context word and a few randomly sampled "noise" words
+- beam search
+- an exact partition function
+> It avoids normalizing over the whole vocabulary: each step updates the positive pair and k negatives only.
+
+Q: A key limitation of static embeddings such as word2vec and GloVe is that [E]
+- they cannot be trained on large corpora
+* each word has a single vector regardless of context, so different senses of a word are conflated
+- they have too many dimensions
+- they require labeled data
+> "bank" gets one vector for both the river and the financial sense; contextual models (ELMo, BERT) produce context-dependent representations.
+
+Q: In TF-IDF, the inverse document frequency term [E]
+- increases the weight of words that appear in many documents
+* decreases the weight of words that appear in many documents
+- counts the words in a document
+- normalizes for document length
+> IDF = log(N / df) down-weights common terms such as "the" and emphasizes terms that discriminate between documents.
+
+Q: BM25 improves on plain TF-IDF by [M]
+- using neural embeddings
+* saturating term frequency and normalizing for document length
+- ignoring rare terms
+- requiring labeled relevance data
+> The k1 parameter limits the benefit of repeated terms and b controls length normalization, making BM25 a strong lexical baseline.
+
+Q: An n-gram language model needs smoothing because [M]
+- it has too few parameters
+* many valid n-grams never appear in the training data and would otherwise get zero probability
+- it cannot count words
+- it uses subword tokens
+> Techniques such as Kneser-Ney redistribute probability mass to unseen events and back off to lower-order statistics.
+
+Q: Greedy decoding and beam search with large beams tend to produce text that is [M]
+- highly random and incoherent
+* generic and repetitive for open-ended generation, despite high likelihood
+- always factually correct
+- longer than sampled text
+> Maximum-likelihood decoding suits tasks with a narrow set of correct outputs (translation). For open-ended text, sampling methods give more human-like diversity.
+
+Q: A length penalty is applied in beam search because [M]
+- long sequences are always better
+* summing log-probabilities favours shorter hypotheses, since each added token lowers the total score
+- it prevents repetition
+- it speeds up decoding
+> Normalizing the score by a function of length counteracts the bias toward short outputs.
+
+Q: To obtain a sentence embedding for semantic search from a BERT-like encoder, a strong approach is [M]
+- using the raw [CLS] vector of an off-the-shelf masked language model
+* training with a contrastive objective on sentence pairs and mean-pooling the token representations
+- summing one-hot vectors
+- using the last token's embedding from the tokenizer
+> Without contrastive fine-tuning (as in Sentence-BERT or SimCSE), BERT's sentence vectors are poorly suited to cosine similarity.
+
+Q: Approximate nearest-neighbour indexes such as HNSW are used in semantic search to [M]
+- improve embedding quality
+* find close vectors in sub-linear time, trading a small amount of recall for speed
+- tokenize queries
+- compress text
+> HNSW navigates a multi-layer proximity graph; IVF and product quantization are other common choices for large corpora.
+
+Q: WordPiece (used in BERT) marks subword continuation with [M]
+- a leading underscore
+* a "##" prefix on pieces that continue a word
+- a trailing space
+- capital letters
+> SentencePiece instead marks word starts with a special underscore-like symbol and works directly on raw text, including spaces.
+
+Q: Named-entity recognition is usually formulated as [E]
+- sentence classification
+* token-level sequence labeling, for example with BIO tags
+- language modeling
+- clustering
+> Each token gets a label marking the Beginning, Inside or Outside of an entity span; a CRF layer can enforce valid tag transitions.
+
+Q: A large vocabulary increases the cost of language model training mainly because of [M]
+- the attention layers
+* the output softmax over all vocabulary items and the size of the embedding matrices
+- the positional encodings
+- the normalization layers
+> The final projection and normalization scale with vocabulary size; sampled softmax, adaptive softmax and subword vocabularies reduce the cost.
+
+Q: Repetition penalties and no-repeat n-gram blocking are decoding heuristics that address [M]
+- slow tokenization
+* degenerate loops in which the model repeats phrases
+- vanishing gradients
+- out-of-vocabulary words
+> Likelihood-maximizing decoders can get stuck in repetition; these heuristics down-weight or forbid recently generated tokens.
+
+Q: The distributional hypothesis underlying word embeddings states that [E]
+- words are distributed uniformly
+* words that occur in similar contexts tend to have similar meanings
+- grammar determines meaning
+- every word has exactly one meaning
+> "You shall know a word by the company it keeps": co-occurrence statistics carry semantic information.
+
+Q: Cosine similarity is preferred to Euclidean distance for comparing text embeddings mainly because [M]
+- it is faster to compute
+* it ignores vector magnitude, which often reflects frequency or length rather than meaning
+- it works only for sparse vectors
+- it satisfies the triangle inequality
+> Direction carries the semantics; for unit-normalized vectors cosine and Euclidean rankings coincide.
+
+Q: The analogy "king - man + woman is close to queen" illustrates that word embeddings [M]
+- memorize dictionary definitions
+* encode some semantic relations as approximately linear offsets
+- are binary vectors
+- cannot represent gender
+> Vector arithmetic recovers many relational patterns, though the effect is weaker than early demonstrations suggested.
+
+Q: Byte-level BPE, as used by GPT-2 and later models, guarantees that [M]
+- every word is one token
+* any Unicode string can be tokenized without unknown tokens, since the base vocabulary is the 256 byte values
+- tokens never cross word boundaries
+- the vocabulary has exactly 256 entries
+> Falling back to bytes covers every input; merges then build larger units on top.
+
+Q: Typical English text averages roughly how many tokens per word with common subword tokenizers? [M]
+- 0.25
+- 0.75
+* 1.3
+- 4
+> A common rule of thumb is about 4 characters or 0.75 words per token, that is around 1.3 tokens per word; code and other languages differ.
+
+Q: A conditional random field (CRF) layer on top of a sequence encoder adds [H]
+- attention between tokens
+* learned transition scores between adjacent labels, with exact inference by the Viterbi algorithm
+- subword tokenization
+- a language-model loss
+> The CRF scores whole label sequences, preventing invalid sequences such as an "inside" tag without a preceding "begin".
+
+Q: Matryoshka representation learning trains embeddings so that [H]
+- each dimension is binary
+* prefixes of the vector (for example the first 64, 256 or 1024 dimensions) are themselves useful embeddings
+- vectors are nested inside tokens
+- the embedding size grows during inference
+> The loss is applied at several truncation lengths, letting applications trade accuracy for storage and speed by truncating.
+
+Q: Late-interaction retrieval models such as ColBERT score a query-document pair by [H]
+- one dot product between two pooled vectors
+* summing, over query tokens, the maximum similarity to any document token
+- concatenating the texts and running a classifier
+- counting shared words
+> Keeping per-token embeddings and using MaxSim is more expressive than single-vector bi-encoders while documents can still be indexed offline.
+
+Q: Label-free pretraining of text encoders with "replaced token detection" (ELECTRA) trains the model to [H]
+- predict masked tokens from a vocabulary softmax
+* decide for every token whether it is original or was replaced by a small generator
+- order shuffled sentences
+- translate the sentence
+> Because the loss is defined on all tokens instead of the 15% that are masked, it is more sample-efficient than masked language modeling.

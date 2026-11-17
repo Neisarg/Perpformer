@@ -1,0 +1,14 @@
+[project]
+name = "prepformer"
+version = "0.1.0"
+description = "ML interview prep that runs your code: lessons, multiple choice and PyTorch coding problems."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+    "numpy>=1.26",
+]
+
+# An application, not a library: uv manages the environment but does not build or install the project itself.
+[tool.uv]
+package = false

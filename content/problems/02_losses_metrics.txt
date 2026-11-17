@@ -1,0 +1,640 @@
+# topic: Losses & Metrics
+# id: losses
+# subtopics: Cross-entropy family; Regression losses; Imbalance-aware losses; Contrastive and metric-learning losses; Classification metrics; Ranking metrics
+
+=== cross-entropy | Cross-Entropy from Logits | Easy
+--- description
+Implement `cross_entropy(logits, targets)` without `F.cross_entropy`, `F.nll_loss` or `log_softmax`.
+
+- `logits`: `(N, C)` raw scores
+- `targets`: `(N,)` class indices
+- returns the mean negative log-likelihood as a scalar tensor
+
+Compute log-probabilities stably (log-sum-exp), then pick the entry of the target class in each row.
+--- starter
+import torch
+
+
+def cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    m = logits.max(dim=-1, keepdim=True).values
+    log_z = m + torch.log(torch.exp(logits - m).sum(dim=-1, keepdim=True))
+    log_probs = logits - log_z
+    picked = log_probs[torch.arange(logits.shape[0]), targets]
+    return -picked.mean()
+--- tests
+def test_uniform():
+    """Uniform logits over 4 classes give ln 4"""
+    logits = torch.zeros(3, 4)
+    check_close(cross_entropy(logits, torch.tensor([0, 1, 3])), math.log(4.0))
+
+def test_matches_torch():
+    """Matches F.cross_entropy on random data"""
+    logits = torch.randn(16, 10) * 3
+    targets = torch.randint(0, 10, (16,))
+    check_close(cross_entropy(logits, targets), torch.nn.functional.cross_entropy(logits, targets))
+
+def test_large_logits():
+    """Stable for large logits"""
+    logits = torch.tensor([[1000.0, 0.0, -1000.0], [0.0, 500.0, 0.0]])
+    targets = torch.tensor([0, 1])
+    out = cross_entropy(logits, targets)
+    check_true(torch.isfinite(out), "loss is not finite")
+    check_close(out, 0.0, tol=1e-4)
+
+def test_gradient():
+    """Gradient with respect to logits is (softmax - one_hot) / N"""
+    logits = torch.randn(5, 4, requires_grad=True)
+    targets = torch.randint(0, 4, (5,))
+    cross_entropy(logits, targets).backward()
+    expected = (torch.softmax(logits.detach(), -1) - torch.nn.functional.one_hot(targets, 4).float()) / 5
+    check_close(logits.grad, expected, name="gradient")
+--- hints
+- log_softmax(z) = z - logsumexp(z).
+- Index with logits[torch.arange(N), targets] or use gather.
+
+=== bce-with-logits | Stable Binary Cross-Entropy with Logits | Medium
+--- description
+Implement `bce_with_logits(logits, targets)` returning the mean binary cross-entropy, where `targets` are floats in `[0, 1]` with the same shape as `logits`.
+
+Computing `sigmoid` and then `log` overflows for large `|z|`. Use the equivalent stable form
+
+```
+loss = max(z, 0) - z * y + log(1 + exp(-|z|))
+```
+
+Do not call `F.binary_cross_entropy_with_logits` or `F.binary_cross_entropy`.
+--- starter
+import torch
+
+
+def bce_with_logits(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def bce_with_logits(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    loss = logits.clamp(min=0) - logits * targets + torch.log1p(torch.exp(-logits.abs()))
+    return loss.mean()
+--- tests
+def test_zero_logit():
+    """A logit of 0 gives ln 2 for any target"""
+    check_close(bce_with_logits(torch.zeros(4), torch.tensor([0.0, 1.0, 1.0, 0.0])), math.log(2.0))
+
+def test_matches_torch():
+    """Matches the built-in on random data, including soft targets"""
+    z = torch.randn(6, 5) * 4
+    y = torch.rand(6, 5)
+    check_close(bce_with_logits(z, y), torch.nn.functional.binary_cross_entropy_with_logits(z, y))
+
+def test_extreme_logits():
+    """Finite and correct for |z| = 200"""
+    z = torch.tensor([200.0, -200.0, 200.0, -200.0])
+    y = torch.tensor([1.0, 0.0, 0.0, 1.0])
+    out = bce_with_logits(z, y)
+    check_true(torch.isfinite(out), "loss is not finite")
+    check_close(out, 100.0, tol=1e-3)
+--- hints
+- For z >= 0 write log(1 + e^-z) + z(1 - y); for z < 0 write log(1 + e^z) - z y. The formula in the description merges both.
+- torch.log1p is more accurate than log(1 + x) for small x.
+
+=== huber-loss | Huber Loss | Easy
+--- description
+Implement `huber_loss(pred, target, delta)` returning the mean over all elements of
+
+```
+0.5 * r^2                      if |r| <= delta
+delta * (|r| - 0.5 * delta)    otherwise        with r = pred - target
+```
+
+Do not call `F.huber_loss` or `F.smooth_l1_loss`.
+--- starter
+import torch
+
+
+def huber_loss(pred: torch.Tensor, target: torch.Tensor, delta: float = 1.0) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def huber_loss(pred: torch.Tensor, target: torch.Tensor, delta: float = 1.0) -> torch.Tensor:
+    r = (pred - target).abs()
+    quadratic = 0.5 * r ** 2
+    linear = delta * (r - 0.5 * delta)
+    return torch.where(r <= delta, quadratic, linear).mean()
+--- tests
+def test_basic():
+    """Quadratic inside delta, linear outside"""
+    pred = torch.tensor([0.5, 3.0])
+    target = torch.zeros(2)
+    check_close(huber_loss(pred, target, 1.0), (0.125 + 2.5) / 2)
+
+def test_matches_torch():
+    """Matches F.huber_loss for several deltas"""
+    pred, target = torch.randn(40) * 3, torch.randn(40)
+    for delta in (0.5, 1.0, 2.5):
+        check_close(huber_loss(pred, target, delta), torch.nn.functional.huber_loss(pred, target, delta=delta), name="delta=%s" % delta)
+
+def test_gradient_is_clipped():
+    """The gradient magnitude never exceeds delta / N"""
+    pred = torch.tensor([10.0, -10.0, 0.1], requires_grad=True)
+    huber_loss(pred, torch.zeros(3), 1.0).backward()
+    check_close(pred.grad, [1 / 3, -1 / 3, 0.1 / 3], name="gradient")
+--- hints
+- torch.where selects element-wise between the two branches.
+
+=== label-smoothing | Cross-Entropy with Label Smoothing | Medium
+--- description
+Implement `label_smoothing_ce(logits, targets, eps)`.
+
+With smoothing `eps` and `C` classes, the target distribution puts `1 - eps + eps / C` on the true class and `eps / C` on every other class. The loss is the mean cross-entropy between that distribution and the model's softmax.
+
+- `logits`: `(N, C)`, `targets`: `(N,)` class indices
+- returns a scalar tensor
+
+Do not pass `label_smoothing=` to `F.cross_entropy`.
+--- starter
+import torch
+import torch.nn.functional as F
+
+
+def label_smoothing_ce(logits: torch.Tensor, targets: torch.Tensor, eps: float = 0.1) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn.functional as F
+
+
+def label_smoothing_ce(logits: torch.Tensor, targets: torch.Tensor, eps: float = 0.1) -> torch.Tensor:
+    log_probs = F.log_softmax(logits, dim=-1)
+    nll = -log_probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+    uniform = -log_probs.mean(dim=-1)
+    return ((1 - eps) * nll + eps * uniform).mean()
+--- tests
+def test_no_smoothing():
+    """eps = 0 reduces to plain cross-entropy"""
+    logits, targets = torch.randn(8, 5), torch.randint(0, 5, (8,))
+    check_close(label_smoothing_ce(logits, targets, 0.0), torch.nn.functional.cross_entropy(logits, targets))
+
+def test_matches_torch():
+    """Matches F.cross_entropy(label_smoothing=...)"""
+    logits, targets = torch.randn(12, 7) * 2, torch.randint(0, 7, (12,))
+    for eps in (0.1, 0.3):
+        expected = torch.nn.functional.cross_entropy(logits, targets, label_smoothing=eps)
+        check_close(label_smoothing_ce(logits, targets, eps), expected, name="eps=%s" % eps)
+
+def test_full_smoothing():
+    """eps = 1 gives the cross-entropy against a uniform target"""
+    logits, targets = torch.randn(4, 6), torch.randint(0, 6, (4,))
+    expected = -torch.log_softmax(logits, -1).mean()
+    check_close(label_smoothing_ce(logits, targets, 1.0), expected)
+--- hints
+- The smoothed loss is (1 - eps) * NLL(true class) + eps * mean over classes of (-log p).
+
+=== focal-loss | Binary Focal Loss | Medium
+--- description
+Implement the binary focal loss from RetinaNet.
+
+For logit `z`, label `y` in {0, 1} and `p = sigmoid(z)`:
+
+```
+p_t     = p        if y == 1 else 1 - p
+alpha_t = alpha    if y == 1 else 1 - alpha
+loss    = -alpha_t * (1 - p_t) ** gamma * log(p_t)
+```
+
+`focal_loss(logits, targets, gamma, alpha)` returns the mean over all elements. `targets` is a float tensor of 0s and 1s with the same shape as `logits`.
+--- starter
+import torch
+import torch.nn.functional as F
+
+
+def focal_loss(logits: torch.Tensor, targets: torch.Tensor, gamma: float = 2.0, alpha: float = 0.25) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn.functional as F
+
+
+def focal_loss(logits: torch.Tensor, targets: torch.Tensor, gamma: float = 2.0, alpha: float = 0.25) -> torch.Tensor:
+    ce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+    p = torch.sigmoid(logits)
+    p_t = p * targets + (1 - p) * (1 - targets)
+    alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+    return (alpha_t * (1 - p_t) ** gamma * ce).mean()
+--- tests
+def test_reduces_to_bce():
+    """gamma = 0 and alpha = 0.5 gives half the BCE"""
+    z, y = torch.randn(20), (torch.rand(20) > 0.5).float()
+    expected = 0.5 * torch.nn.functional.binary_cross_entropy_with_logits(z, y)
+    check_close(focal_loss(z, y, gamma=0.0, alpha=0.5), expected)
+
+def test_hand_example():
+    """Single positive with p = 0.5"""
+    out = focal_loss(torch.tensor([0.0]), torch.tensor([1.0]), gamma=2.0, alpha=0.25)
+    check_close(out, 0.25 * 0.25 * math.log(2.0))
+
+def test_random():
+    """Matches the formula on random data"""
+    z, y = torch.randn(4, 9) * 2, (torch.rand(4, 9) > 0.7).float()
+    p = torch.sigmoid(z)
+    p_t = torch.where(y == 1, p, 1 - p)
+    a_t = torch.where(y == 1, torch.tensor(0.3), torch.tensor(0.7))
+    expected = (-a_t * (1 - p_t) ** 1.5 * torch.log(p_t)).mean()
+    check_close(focal_loss(z, y, gamma=1.5, alpha=0.3), expected)
+
+def test_easy_examples_downweighted():
+    """A confident correct prediction contributes far less than under BCE"""
+    z, y = torch.tensor([4.0]), torch.tensor([1.0])
+    bce = torch.nn.functional.binary_cross_entropy_with_logits(z, y)
+    check_true(focal_loss(z, y, gamma=2.0, alpha=1.0) < 0.01 * bce, "easy example was not down-weighted")
+--- hints
+- -log(p_t) is exactly the element-wise binary cross-entropy, so you can reuse a stable BCE with reduction="none".
+
+=== kl-divergence | KL Divergence Between Categoricals | Easy
+--- description
+Implement `kl_divergence(p_logits, q_logits)` computing `KL(P || Q)` for categorical distributions given by logits of shape `(N, C)`:
+
+```
+KL(P || Q) = sum_c P(c) * (log P(c) - log Q(c))
+```
+
+Return the mean over the `N` rows as a scalar tensor.
+--- starter
+import torch
+import torch.nn.functional as F
+
+
+def kl_divergence(p_logits: torch.Tensor, q_logits: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn.functional as F
+
+
+def kl_divergence(p_logits: torch.Tensor, q_logits: torch.Tensor) -> torch.Tensor:
+    log_p = F.log_softmax(p_logits, dim=-1)
+    log_q = F.log_softmax(q_logits, dim=-1)
+    return (log_p.exp() * (log_p - log_q)).sum(dim=-1).mean()
+--- tests
+def test_identical():
+    """KL(P || P) = 0"""
+    logits = torch.randn(5, 8)
+    check_close(kl_divergence(logits, logits.clone()), 0.0, tol=1e-6)
+
+def test_hand_example():
+    """P = (0.5, 0.5), Q = (0.25, 0.75)"""
+    p = torch.log(torch.tensor([[0.5, 0.5]]))
+    q = torch.log(torch.tensor([[0.25, 0.75]]))
+    expected = 0.5 * math.log(0.5 / 0.25) + 0.5 * math.log(0.5 / 0.75)
+    check_close(kl_divergence(p, q), expected)
+
+def test_matches_torch():
+    """Matches F.kl_div with batchmean reduction"""
+    p_logits, q_logits = torch.randn(6, 9), torch.randn(6, 9)
+    expected = torch.nn.functional.kl_div(torch.log_softmax(q_logits, -1), torch.softmax(p_logits, -1), reduction="batchmean")
+    check_close(kl_divergence(p_logits, q_logits), expected)
+
+def test_asymmetric():
+    """KL is not symmetric"""
+    p_logits, q_logits = torch.tensor([[2.0, 0.0, -1.0]]), torch.tensor([[0.0, 0.0, 3.0]])
+    check_true(abs(float(kl_divergence(p_logits, q_logits)) - float(kl_divergence(q_logits, p_logits))) > 1e-3, "KL(P||Q) should differ from KL(Q||P)")
+--- hints
+- Work in log space with log_softmax to avoid log(0).
+
+=== info-nce | Symmetric InfoNCE (CLIP) Loss | Medium
+--- description
+Implement the contrastive loss used by CLIP.
+
+`a` and `b` are `(N, D)` embeddings where `a[i]` and `b[i]` are a matching pair and every other combination is a negative.
+
+1. L2-normalize both sets of embeddings.
+2. `logits = a @ b.T / temperature` (shape `(N, N)`).
+3. The loss is the average of the cross-entropy over rows (a to b) and over columns (b to a), with the diagonal as the target.
+
+Return a scalar tensor.
+--- starter
+import torch
+import torch.nn.functional as F
+
+
+def info_nce(a: torch.Tensor, b: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn.functional as F
+
+
+def info_nce(a: torch.Tensor, b: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
+    a = F.normalize(a, dim=-1)
+    b = F.normalize(b, dim=-1)
+    logits = a @ b.T / temperature
+    labels = torch.arange(a.shape[0])
+    return 0.5 * (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels))
+--- tests
+def test_reference():
+    """Matches a reference implementation"""
+    a, b = torch.randn(8, 16), torch.randn(8, 16)
+    an, bn = a / a.norm(dim=-1, keepdim=True), b / b.norm(dim=-1, keepdim=True)
+    logits = an @ bn.T / 0.1
+    labels = torch.arange(8)
+    expected = 0.5 * (torch.nn.functional.cross_entropy(logits, labels) + torch.nn.functional.cross_entropy(logits.T, labels))
+    check_close(info_nce(a, b, 0.1), expected)
+
+def test_scale_invariant():
+    """Rescaling the embeddings does not change the loss (they are normalized)"""
+    a, b = torch.randn(5, 4), torch.randn(5, 4)
+    check_close(info_nce(a * 10, b * 0.1, 0.5), info_nce(a, b, 0.5))
+
+def test_aligned_pairs_low_loss():
+    """Perfectly aligned orthogonal pairs give a near-zero loss at low temperature"""
+    a = torch.eye(6)
+    check_true(float(info_nce(a, a.clone(), 0.05)) < 1e-4, "loss should be near zero for perfectly aligned pairs")
+
+def test_uniform():
+    """Identical embeddings everywhere give ln N"""
+    a = torch.ones(4, 3)
+    check_close(info_nce(a, a.clone(), 1.0), math.log(4.0))
+--- hints
+- The target for row i is column i, so labels = torch.arange(N).
+- The column-wise loss is the same computation on logits.T.
+
+=== triplet-loss | Triplet Margin Loss | Easy
+--- description
+Implement `triplet_loss(anchor, positive, negative, margin)` for `(N, D)` embeddings:
+
+```
+loss_i = max(0, ||a_i - p_i|| - ||a_i - n_i|| + margin)
+```
+
+using Euclidean distances. Return the mean over the batch.
+--- starter
+import torch
+
+
+def triplet_loss(anchor: torch.Tensor, positive: torch.Tensor, negative: torch.Tensor, margin: float = 1.0) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def triplet_loss(anchor: torch.Tensor, positive: torch.Tensor, negative: torch.Tensor, margin: float = 1.0) -> torch.Tensor:
+    d_pos = (anchor - positive).pow(2).sum(dim=-1).sqrt()
+    d_neg = (anchor - negative).pow(2).sum(dim=-1).sqrt()
+    return (d_pos - d_neg + margin).clamp(min=0).mean()
+--- tests
+def test_hand_example():
+    """One violated and one satisfied triplet"""
+    a = torch.tensor([[0.0, 0.0], [0.0, 0.0]])
+    p = torch.tensor([[3.0, 4.0], [1.0, 0.0]])
+    n = torch.tensor([[0.0, 2.0], [0.0, 5.0]])
+    check_close(triplet_loss(a, p, n, 1.0), (4.0 + 0.0) / 2, tol=1e-3)
+
+def test_matches_torch():
+    """Matches F.triplet_margin_loss"""
+    a, p, n = torch.randn(10, 6), torch.randn(10, 6), torch.randn(10, 6)
+    expected = torch.nn.functional.triplet_margin_loss(a, p, n, margin=0.7)
+    check_close(triplet_loss(a, p, n, 0.7), expected, tol=1e-3)
+
+def test_zero_when_satisfied():
+    """Loss is zero when negatives are far beyond the margin"""
+    a = torch.randn(4, 3)
+    check_close(triplet_loss(a, a + 0.01, a + 100.0, 1.0), 0.0)
+--- hints
+- Compute both distances with (a - b).pow(2).sum(-1).sqrt().
+- clamp(min=0) implements the max(0, .) hinge before averaging.
+
+=== precision-recall-f1 | Precision, Recall and F1 | Easy
+--- description
+Implement `precision_recall_f1(preds, targets)` for binary classification.
+
+`preds` and `targets` are 1-D tensors of 0s and 1s. Return a tuple of three Python floats `(precision, recall, f1)` for the positive class.
+
+When a denominator is zero (no predicted positives, no actual positives, or precision + recall = 0), that metric is defined as `0.0`.
+--- starter
+import torch
+
+
+def precision_recall_f1(preds: torch.Tensor, targets: torch.Tensor):
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def precision_recall_f1(preds: torch.Tensor, targets: torch.Tensor):
+    preds, targets = preds.bool(), targets.bool()
+    tp = (preds & targets).sum().item()
+    fp = (preds & ~targets).sum().item()
+    fn = (~preds & targets).sum().item()
+    precision = tp / (tp + fp) if tp + fp > 0 else 0.0
+    recall = tp / (tp + fn) if tp + fn > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall > 0 else 0.0
+    return precision, recall, f1
+--- tests
+def test_basic():
+    """TP = 2, FP = 1, FN = 2"""
+    preds = torch.tensor([1, 1, 1, 0, 0, 0])
+    targets = torch.tensor([1, 1, 0, 1, 1, 0])
+    p, r, f = precision_recall_f1(preds, targets)
+    check_close(p, 2 / 3, name="precision")
+    check_close(r, 0.5, name="recall")
+    check_close(f, 2 * (2 / 3) * 0.5 / (2 / 3 + 0.5), name="f1")
+
+def test_no_predicted_positives():
+    """All-negative predictions give zeros, not a division error"""
+    p, r, f = precision_recall_f1(torch.zeros(4, dtype=torch.long), torch.tensor([1, 0, 1, 0]))
+    check_close(p, 0.0, name="precision")
+    check_close(r, 0.0, name="recall")
+    check_close(f, 0.0, name="f1")
+
+def test_perfect():
+    """Perfect predictions"""
+    t = torch.tensor([1, 0, 1, 1, 0])
+    p, r, f = precision_recall_f1(t.clone(), t)
+    check_close(p, 1.0, name="precision")
+    check_close(r, 1.0, name="recall")
+    check_close(f, 1.0, name="f1")
+--- hints
+- Count TP, FP and FN with boolean masks.
+- Guard each division: return 0.0 when its denominator is zero.
+
+=== roc-auc | ROC AUC | Medium
+--- description
+Implement `roc_auc(scores, labels)` returning the area under the ROC curve as a Python float.
+
+Use the probabilistic definition: AUC is the probability that a randomly chosen positive has a higher score than a randomly chosen negative, counting ties as one half.
+
+- `scores`: `(N,)` floats, `labels`: `(N,)` of 0s and 1s
+- you may assume there is at least one positive and one negative
+
+**Example**
+
+```
+roc_auc(tensor([0.1, 0.4, 0.35, 0.8]), tensor([0, 0, 1, 1]))  ->  0.75
+```
+--- starter
+import torch
+
+
+def roc_auc(scores: torch.Tensor, labels: torch.Tensor) -> float:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def roc_auc(scores: torch.Tensor, labels: torch.Tensor) -> float:
+    pos = scores[labels == 1]
+    neg = scores[labels == 0]
+    diff = pos.unsqueeze(1) - neg.unsqueeze(0)
+    wins = (diff > 0).double().sum() + 0.5 * (diff == 0).double().sum()
+    return (wins / (pos.numel() * neg.numel())).item()
+--- tests
+def test_example():
+    """Example from the description"""
+    check_close(roc_auc(torch.tensor([0.1, 0.4, 0.35, 0.8]), torch.tensor([0, 0, 1, 1])), 0.75)
+
+def test_perfect_and_inverted():
+    """Perfect ranking gives 1, inverted ranking gives 0"""
+    labels = torch.tensor([0, 0, 1, 1, 1])
+    check_close(roc_auc(torch.tensor([0.1, 0.2, 0.7, 0.8, 0.9]), labels), 1.0)
+    check_close(roc_auc(torch.tensor([0.9, 0.8, 0.3, 0.2, 0.1]), labels), 0.0)
+
+def test_ties():
+    """Constant scores give 0.5"""
+    check_close(roc_auc(torch.ones(6), torch.tensor([0, 1, 0, 1, 1, 0])), 0.5)
+
+def test_random():
+    """Matches a brute-force pair count"""
+    scores = torch.round(torch.rand(60) * 20) / 20
+    labels = (torch.rand(60) > 0.6).long()
+    labels[0], labels[1] = 1, 0
+    wins, total = 0.0, 0
+    for i in range(60):
+        for j in range(60):
+            if labels[i] == 1 and labels[j] == 0:
+                total += 1
+                wins += 1.0 if scores[i] > scores[j] else (0.5 if scores[i] == scores[j] else 0.0)
+    check_close(roc_auc(scores, labels), wins / total)
+--- hints
+- Compare every positive score with every negative score using broadcasting: pos[:, None] - neg[None, :].
+- For large N, a rank-based formula (Mann-Whitney U) avoids the quadratic memory.
+
+=== confusion-matrix | Confusion Matrix | Easy
+--- description
+Implement `confusion_matrix(preds, targets, num_classes)`.
+
+Return an integer tensor `M` of shape `(num_classes, num_classes)` where `M[i, j]` counts the examples whose true class is `i` and predicted class is `j`. Avoid Python loops over examples.
+--- starter
+import torch
+
+
+def confusion_matrix(preds: torch.Tensor, targets: torch.Tensor, num_classes: int) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def confusion_matrix(preds: torch.Tensor, targets: torch.Tensor, num_classes: int) -> torch.Tensor:
+    idx = targets.long() * num_classes + preds.long()
+    return torch.bincount(idx, minlength=num_classes * num_classes).view(num_classes, num_classes)
+--- tests
+def test_basic():
+    """Rows are true classes, columns are predictions"""
+    preds = torch.tensor([0, 1, 2, 2, 0, 1])
+    targets = torch.tensor([0, 1, 1, 2, 2, 1])
+    expected = torch.tensor([[1, 0, 0], [0, 2, 1], [1, 0, 1]])
+    check_equal(confusion_matrix(preds, targets, 3), expected)
+
+def test_unused_class():
+    """Classes that never occur still get a row and a column"""
+    out = confusion_matrix(torch.tensor([0, 0]), torch.tensor([0, 1]), 4)
+    check_shape(out, (4, 4))
+    check_equal(out.sum(), torch.tensor(2))
+
+def test_random():
+    """Matches a loop on random data"""
+    preds, targets = torch.randint(0, 5, (200,)), torch.randint(0, 5, (200,))
+    expected = torch.zeros(5, 5, dtype=torch.long)
+    for p, t in zip(preds.tolist(), targets.tolist()):
+        expected[t, p] += 1
+    check_equal(confusion_matrix(preds, targets, 5), expected)
+--- hints
+- Map each (true, predicted) pair to a single index true * C + predicted and count with torch.bincount.
+
+=== ndcg | NDCG@k | Medium
+--- description
+Implement `ndcg_at_k(relevance, k)`.
+
+`relevance` is a 1-D tensor of graded relevance labels listed in the order the system ranked the items (position 0 is the top result).
+
+```
+DCG@k  = sum over i < k of (2 ** rel_i - 1) / log2(i + 2)
+NDCG@k = DCG@k / IDCG@k
+```
+
+where IDCG@k is the DCG@k of the same labels sorted in decreasing order. Return a Python float, and `0.0` when IDCG is 0.
+--- starter
+import torch
+
+
+def ndcg_at_k(relevance: torch.Tensor, k: int) -> float:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def ndcg_at_k(relevance: torch.Tensor, k: int) -> float:
+    rel = relevance.double()
+
+    def dcg(r):
+        r = r[:k]
+        discounts = torch.log2(torch.arange(r.numel(), dtype=torch.float64) + 2.0)
+        return ((2.0 ** r - 1.0) / discounts).sum().item()
+
+    ideal = dcg(torch.sort(rel, descending=True).values)
+    if ideal == 0:
+        return 0.0
+    return dcg(rel) / ideal
+--- tests
+def test_binary():
+    """One relevant item at rank 1 or rank 2"""
+    check_close(ndcg_at_k(torch.tensor([1, 0]), 2), 1.0)
+    check_close(ndcg_at_k(torch.tensor([0, 1]), 2), 1 / math.log2(3))
+
+def test_graded():
+    """Graded relevance with a cut-off"""
+    dcg = 7 + 3 / math.log2(3) + 7 / 2
+    idcg = 7 + 7 / math.log2(3) + 3 / 2
+    check_close(ndcg_at_k(torch.tensor([3, 2, 3, 0, 1, 2]), 3), dcg / idcg)
+
+def test_no_relevant():
+    """All-zero relevance returns 0.0"""
+    check_close(ndcg_at_k(torch.zeros(5), 3), 0.0)
+
+def test_ideal_uses_all_items():
+    """The ideal ranking may use relevant items that the system ranked below k"""
+    check_close(ndcg_at_k(torch.tensor([0, 0, 1]), 2), 0.0)
+    check_close(ndcg_at_k(torch.tensor([0, 1, 1]), 2), (1 / math.log2(3)) / (1 + 1 / math.log2(3)))
+--- hints
+- Write one helper that computes DCG@k for a relevance vector.
+- IDCG is the same helper applied to the labels sorted in decreasing order (sort all labels, then cut at k).
+

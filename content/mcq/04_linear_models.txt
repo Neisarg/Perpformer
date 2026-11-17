@@ -1,0 +1,178 @@
+# topic: Linear & Logistic Regression
+# id: linear
+# subtopics: Ordinary least squares and its assumptions; Ridge, lasso and elastic net; Logistic regression and the sigmoid; Softmax regression; Generalized linear models; Multicollinearity and feature scaling; Interpreting coefficients
+
+Q: Minimizing mean squared error in linear regression is equivalent to maximum likelihood under the assumption that the noise is [E]
+- Laplace distributed
+* Gaussian with constant variance
+- uniformly distributed
+- Poisson distributed
+> The Gaussian log-likelihood is, up to constants, the negative sum of squared residuals. Laplace noise corresponds to mean absolute error.
+
+Q: Ridge regression changes the OLS solution to [E]
+- (X^T X)^-1 X^T y + lambda
+* (X^T X + lambda I)^-1 X^T y
+- (X^T X - lambda I)^-1 X^T y
+- lambda (X^T X)^-1 X^T y
+> Adding lambda ||w||^2 to the objective adds lambda I to X^T X, which also makes the system well-conditioned and always invertible.
+
+Q: Which regularizer performs automatic feature selection by driving some coefficients exactly to zero? [E]
+- Ridge (L2)
+* Lasso (L1)
+- Dropout
+- Early stopping
+> The corners of the L1 ball lie on the axes, so the optimum often has exactly zero coefficients.
+
+Q: With two perfectly correlated features, lasso tends to [M]
+- assign both the same coefficient
+* pick one of them somewhat arbitrarily and zero the other
+- fail to converge
+- give both an infinite coefficient
+> Lasso has no unique solution among duplicated features and typically keeps one. Ridge splits the weight evenly; elastic net combines both behaviours.
+
+Q: Logistic regression models [E]
+- the class label as a linear function of the features
+* the log-odds of the positive class as a linear function of the features
+- the probability as a linear function of the features
+- the features as a Gaussian given the class
+> log(p / (1 - p)) = w^T x + b. The probability is the sigmoid of the linear score.
+
+Q: The gradient of the binary cross-entropy loss with respect to the logit z, for prediction p = sigmoid(z) and label y, is [M]
+- y - p
+* p - y
+- p (1 - p)
+- (p - y) p (1 - p)
+> The sigmoid derivative cancels with the cross-entropy derivative, leaving p - y. This is why cross-entropy avoids the saturation problem of MSE on sigmoid outputs.
+
+Q: Logistic regression trained on linearly separable data without regularization will [M]
+- converge to a unique finite solution
+* have weights that grow without bound as the likelihood keeps increasing
+- fail on the first iteration
+- learn a non-linear decision boundary
+> Scaling a separating weight vector increases the likelihood, so the norm diverges; regularization or early stopping gives a finite solution.
+
+Q: In logistic regression, a coefficient of 0.7 on feature x_j means that a one-unit increase in x_j [M]
+- increases the predicted probability by 0.7
+- multiplies the predicted probability by 0.7
+* multiplies the odds of the positive class by e^0.7, about 2
+- increases the odds by 0.7
+> Coefficients act additively on log-odds, hence multiplicatively on the odds; exp(0.7) is about 2.01.
+
+Q: Multicollinearity among features in OLS primarily causes [M]
+- biased predictions
+* unstable coefficient estimates with large variance
+- a non-convex loss
+- heteroscedastic residuals
+> Predictions can remain fine, but X^T X becomes nearly singular, so individual coefficients are poorly determined and sensitive to small data changes.
+
+Q: R-squared on the training set, when you add an additional feature to an OLS model, [E]
+- always decreases
+* never decreases
+- stays exactly the same
+- can go either way
+> The larger model can always reproduce the smaller one by setting the new coefficient to zero, so training fit cannot get worse. Adjusted R-squared penalizes this.
+
+Q: Feature standardization matters most for which of the following? [M]
+- OLS predictions solved in closed form
+- Decision trees
+* Ridge or lasso regression
+- Naive Bayes with categorical features
+> Penalties on coefficient size depend on feature scale, so unscaled features are penalized unequally. Unregularized OLS predictions and trees are scale-invariant.
+
+Q: Softmax regression with K classes and d features, with a bias per class, has how many parameters? [E]
+- d + K
+* K (d + 1)
+- d^K
+- K^2 d
+> One weight vector of size d plus one bias for each of the K classes. (One class's parameters are redundant, but the standard parameterization keeps all K.)
+
+Q: Which loss is most robust to outliers in the target variable? [M]
+- Mean squared error
+* Huber loss
+- Squared hinge loss
+- Exponential loss
+> Huber is quadratic near zero and linear for large residuals, limiting the influence of outliers that would dominate squared error.
+
+Q: Poisson regression, a generalized linear model for count data, uses which link function by default? [M]
+- Identity
+- Logit
+* Log
+- Probit
+> The canonical link for the Poisson is the log: log E[y] = w^T x, which keeps the predicted mean positive.
+
+Q: Heteroscedasticity in a linear regression means [M]
+- the features are correlated with each other
+* the variance of the errors is not constant across observations
+- the errors are not centred at zero
+- the relationship is non-linear
+> With non-constant error variance OLS coefficients stay unbiased but are no longer efficient, and the usual standard errors are wrong.
+
+Q: Why is MSE a poor loss for training a classifier with a sigmoid output? [M]
+- It is not differentiable
+* The gradient contains a factor p(1-p) that vanishes when the unit saturates, even if the prediction is badly wrong
+- It cannot be minimized by gradient descent
+- It always gives a convex objective, which overfits
+> With MSE the gradient with respect to the logit is (p - y) p (1 - p); confident wrong predictions get tiny gradients. The loss is also non-convex in the weights.
+
+Q: Elastic net combines [E]
+- ridge with dropout
+* L1 and L2 penalties
+- lasso with early stopping
+- OLS with PCA
+> Elastic net adds both penalties, keeping lasso's sparsity while handling groups of correlated features more stably.
+
+Q: The decision boundary of binary logistic regression in feature space is [E]
+- a sigmoid curve
+* a hyperplane
+- a circle
+- piecewise constant
+> p = 0.5 exactly where w^T x + b = 0, which is a hyperplane. Non-linear boundaries require feature transformations.
+
+Q: Leverage and Cook's distance are diagnostics for [H]
+- multicollinearity
+* influential observations in regression
+- non-normality of features
+- autocorrelation of residuals
+> High-leverage points have unusual feature values; Cook's distance measures how much the fit changes when a point is removed. Multicollinearity is diagnosed with VIF.
+
+Q: Using one-hot encoding for a categorical feature with K levels together with an intercept in OLS, you should drop one level because otherwise [M]
+- the model becomes non-linear
+* the design matrix is rank deficient (the dummy variable trap)
+- predictions become biased
+- the loss is no longer convex
+> The K dummies sum to the intercept column, making X^T X singular. Dropping one level or regularizing removes the redundancy.
+
+Q: Which optimization method is classically used to fit logistic regression and is equivalent to Newton's method? [H]
+- Coordinate ascent on the dual
+* Iteratively reweighted least squares
+- Expectation maximization
+- Simulated annealing
+> Newton's update for the logistic likelihood can be written as a weighted least squares problem with weights p(1-p), solved repeatedly (IRLS).
+
+Q: A linear regression has high training error and similar high validation error. The most appropriate next step is [E]
+- adding more L2 regularization
+- collecting more training rows of the same kind
+* adding features or non-linear terms to increase model capacity
+- reducing the number of features
+> Similar high errors on both sets indicate underfitting (high bias), which is addressed by a more expressive model or better features.
+
+Q: With class-imbalanced data, down-sampling the negative class by a factor r before fitting logistic regression mainly distorts [H]
+- the coefficient of every feature equally
+* the intercept: predicted log-odds are shifted by a constant that can be corrected afterwards
+- nothing, the model is unchanged
+- the convexity of the loss
+> Sampling on the label changes the prior odds, which appears as a shift of log(r) in the intercept; the feature coefficients are asymptotically unaffected. Subtract log(r) from the logit to recover calibrated probabilities.
+
+Q: The bias term in a linear model [E]
+- should be heavily regularized like other weights
+* lets the fitted hyperplane not pass through the origin and is usually left unregularized
+- is equivalent to feature scaling
+- makes the model non-linear
+> The intercept captures the baseline level of the target. Penalizing it would make the solution depend on an arbitrary shift of y.
+
+Q: In the probabilistic view, the sigmoid arises naturally in binary classification when [H]
+- the class-conditional densities are arbitrary
+* the class-conditional densities are Gaussians with a shared covariance
+- the features are discrete
+- the prior over classes is uniform
+> For exponential-family class conditionals with shared dispersion (such as shared-covariance Gaussians, i.e. LDA), the posterior log-odds are linear in x, giving a sigmoid of a linear function.

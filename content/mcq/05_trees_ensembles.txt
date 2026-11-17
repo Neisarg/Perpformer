@@ -1,0 +1,178 @@
+# topic: Trees, Ensembles & Boosting
+# id: trees
+# subtopics: Split criteria (Gini, entropy, variance); Pruning and tree depth; Bagging and random forests; AdaBoost and gradient boosting; XGBoost, LightGBM and CatBoost; Feature importance; Handling missing values and categoricals
+
+Q: A node contains 50% positive and 50% negative examples. Its Gini impurity is [E]
+- 0
+- 0.25
+* 0.5
+- 1
+> Gini = 1 - sum p_k^2 = 1 - (0.25 + 0.25) = 0.5, the maximum for two classes. Entropy would be 1 bit.
+
+Q: Bagging primarily reduces [E]
+- bias
+* variance
+- irreducible noise
+- training time
+> Averaging many high-variance, low-bias models trained on bootstrap samples reduces variance while leaving bias roughly unchanged.
+
+Q: Boosting primarily reduces [E]
+* bias, by sequentially fitting models to the errors of the current ensemble
+- variance, by averaging independent models
+- the number of features
+- label noise
+> Boosting adds weak learners that correct earlier mistakes, reducing bias (and often variance); it can overfit noisy labels if run too long.
+
+Q: What makes a random forest different from plain bagging of decision trees? [E]
+- Trees are trained sequentially
+* A random subset of features is considered at each split
+- Trees are pruned to depth 1
+- Each tree is trained on the full dataset
+> Feature subsampling decorrelates the trees, so averaging reduces variance more than bagging alone.
+
+Q: In gradient boosting with squared-error loss, each new tree is fit to [M]
+- the original targets
+* the residuals (negative gradients) of the current ensemble
+- randomly permuted targets
+- the predictions of the previous tree
+> Each stage fits the negative gradient of the loss with respect to the current prediction; for squared error this is exactly the residual y - F(x).
+
+Q: The out-of-bag (OOB) error of a random forest is [M]
+- the training error of each tree on its bootstrap sample
+* an estimate of generalization error using, for each sample, only the trees that did not see it
+- the error on a separate hold-out set
+- the error of the worst tree
+> About 36.8% of samples are left out of each bootstrap sample, so they serve as a built-in validation set for that tree.
+
+Q: Which is a weakness of impurity-based (mean decrease in impurity) feature importance? [M]
+- It cannot be computed for random forests
+* It is biased toward high-cardinality and continuous features
+- It requires a held-out set
+- It ignores the training data
+> Features with many possible split points get more chances to reduce impurity by chance. Permutation importance on held-out data is less biased.
+
+Q: Decision trees are insensitive to which preprocessing step? [E]
+- Removing duplicated rows
+* Monotonic scaling of individual features, such as standardization or a log transform
+- Adding noise features
+- Changing the labels
+> Splits depend only on the ordering of feature values, which monotonic transformations preserve.
+
+Q: In XGBoost, the split gain uses both first and second derivatives of the loss because [H]
+- it trains neural networks at the leaves
+* it optimizes a second-order Taylor approximation of the regularized objective
+- it uses Newton's method to choose the learning rate schedule
+- second derivatives are needed to compute Gini impurity
+> XGBoost expands the loss to second order; leaf weights are -G / (H + lambda) and the gain is computed from sums of gradients G and Hessians H.
+
+Q: Lowering the learning rate (shrinkage) in gradient boosting generally requires [M]
+- fewer trees
+* more trees, and usually improves generalization
+- deeper trees
+- no other change
+> Each tree contributes less, so more rounds are needed, but smaller steps act as regularization and typically give better test error.
+
+Q: LightGBM grows trees leaf-wise (best-first) instead of level-wise. A consequence is [M]
+- trees are always perfectly balanced
+* it can reach lower loss with the same number of leaves but overfits more easily on small data
+- it cannot handle categorical features
+- training is always slower
+> Leaf-wise growth splits the leaf with the largest gain, producing deeper, unbalanced trees; num_leaves and min_data_in_leaf control overfitting.
+
+Q: AdaBoost updates example weights after each round by [M]
+- setting all weights equal
+* increasing the weights of misclassified examples
+- increasing the weights of correctly classified examples
+- removing misclassified examples
+> Misclassified points get more weight so that the next weak learner focuses on them. AdaBoost is equivalent to forward stagewise fitting with exponential loss.
+
+Q: A fully grown, unpruned decision tree typically has [E]
+- high bias and low variance
+* low bias and high variance
+- high bias and high variance
+- low bias and low variance
+> Deep trees can fit the training set almost perfectly but change a lot with small data perturbations, which is why they are good base learners for bagging.
+
+Q: Which technique lets histogram-based gradient boosting libraries train fast on large data? [M]
+- Sorting every feature at every node
+* Bucketing continuous features into a small number of bins and scanning bin statistics
+- Using only one feature per tree
+- Training without gradients
+> Binning reduces the candidate split points from the number of unique values to a few hundred and allows cheap histogram subtraction between siblings.
+
+Q: How do XGBoost and LightGBM handle missing feature values by default? [M]
+- Rows with missing values are dropped
+- Missing values are imputed with the mean
+* Each split learns a default direction for missing values
+- Training fails
+> For each split the algorithm tries sending missing values left and right and keeps the direction with higher gain (sparsity-aware splitting).
+
+Q: Compared with gradient-boosted trees, a random forest is generally [M]
+- more sensitive to hyper-parameters and harder to parallelize
+* easier to tune and trivially parallel, but often slightly less accurate on tabular data
+- unable to do regression
+- sequential by construction
+> Forest trees are independent, so training parallelizes and few settings matter. Carefully tuned boosting usually wins on accuracy.
+
+Q: Stacking differs from bagging and boosting in that it [M]
+- uses only one type of base model
+* trains a meta-model on the (out-of-fold) predictions of several base models
+- averages models with equal weights
+- needs no validation data
+> A second-level learner combines base predictions; out-of-fold predictions are used so the meta-model does not learn from leaked training labels.
+
+Q: The information gain of a split is [E]
+- the Gini of the parent
+* the parent's entropy minus the weighted average entropy of the children
+- the difference in size between the children
+- the depth of the node
+> A good split yields children that are purer than the parent; the weighting uses the fraction of samples sent to each child.
+
+Q: Which is NOT a common way to regularize a gradient-boosted tree model? [M]
+- Subsampling rows and columns
+- Limiting tree depth or the minimum samples per leaf
+- Early stopping on a validation set
+* Increasing the number of boosting rounds without limit
+> More rounds increase capacity and eventually overfit. Shrinkage, subsampling, depth limits, leaf penalties and early stopping regularize.
+
+Q: Tree ensembles usually extrapolate poorly for regression because [M]
+- they use too many parameters
+* predictions are piecewise constant, so outside the training range they stay at the value of the outermost leaves
+- they cannot model interactions
+- they require scaled features
+> A tree cannot predict values beyond those seen in its leaves, so trends are not continued past the training range.
+
+Q: CatBoost's "ordered" target statistics for categorical features are designed to prevent [H]
+- slow training
+* target leakage when encoding a category by its mean target
+- excessive memory use
+- class imbalance
+> Encoding a row's category with a target mean that includes its own label leaks information. CatBoost computes the statistic only from rows earlier in a random permutation.
+
+Q: For a regression tree, the split criterion is typically [E]
+- cross-entropy reduction
+* reduction in variance (squared error) of the target
+- increase in Gini
+- maximum margin
+> Each leaf predicts the mean target; the best split minimizes the weighted sum of within-child variances.
+
+Q: Isolation forests detect anomalies based on [M]
+- distance to the k-th nearest neighbour
+* how few random splits are needed to isolate a point
+- reconstruction error
+- density estimated with Gaussian kernels
+> Anomalies are few and different, so random partitioning isolates them close to the root; short average path length signals an outlier.
+
+Q: SHAP values for a tree model attribute a prediction to features by [H]
+- counting how often each feature is used in splits
+* computing each feature's Shapley value, its average marginal contribution over feature coalitions
+- measuring the drop in accuracy when the feature is permuted
+- taking the gradient of the output with respect to the input
+> SHAP is based on Shapley values from cooperative game theory and gives additive, per-prediction attributions; TreeSHAP computes them efficiently for trees.
+
+Q: Monotonic constraints in gradient boosting are used to [M]
+- speed up training
+* force the prediction to be non-decreasing or non-increasing in chosen features
+- make trees balanced
+- remove the need for a learning rate
+> Constraints encode domain knowledge (for example, price should not decrease with size) and improve trust and robustness, typically by rejecting splits that violate the ordering.

@@ -1,0 +1,178 @@
+# topic: Linear Algebra
+# id: linalg
+# subtopics: Rank, null space and invertibility; Eigenvalues and eigenvectors; SVD and low-rank approximation; Positive definiteness; Norms and projections; Matrix calculus; Numerical stability and conditioning
+
+Q: A real matrix A has shape 5 x 3 and rank 3. Which statement must be true? [E]
+- A has a non-trivial null space
+* The columns of A are linearly independent
+- The rows of A are linearly independent
+- A A^T is invertible
+> Rank 3 equals the number of columns, so the columns are independent and the null space is {0}. Five rows in a rank-3 matrix must be dependent, and the 5 x 5 matrix A A^T has rank 3, so it is singular.
+
+Q: For a symmetric real matrix, which property always holds? [E]
+- All eigenvalues are positive
+- It is invertible
+* Eigenvalues are real and eigenvectors can be chosen orthonormal
+- Its singular values equal its eigenvalues
+> The spectral theorem: a real symmetric matrix is orthogonally diagonalizable with real eigenvalues. Eigenvalues may be negative or zero; singular values are the absolute values of the eigenvalues.
+
+Q: The singular values of a matrix A are [E]
+- the eigenvalues of A
+* the square roots of the eigenvalues of A^T A
+- the diagonal entries of A
+- the squares of the eigenvalues of A + A^T
+> A^T A = V S^2 V^T, so its eigenvalues are the squared singular values of A.
+
+Q: Which matrix is guaranteed to be positive semi-definite for any real matrix X? [E]
+- X + X^T
+- X - X^T
+* X^T X
+- X X
+> v^T X^T X v = ||Xv||^2 >= 0 for every v. The other choices can have negative eigenvalues (or are not even symmetric).
+
+Q: The best rank-k approximation of a matrix in Frobenius norm is obtained by [M]
+- keeping the k columns with the largest norm
+* keeping the k largest singular values and their singular vectors
+- zeroing all entries below the k-th largest magnitude
+- keeping the k largest eigenvalues of A + A^T
+> This is the Eckart-Young theorem: truncating the SVD gives the optimal rank-k approximation in both Frobenius and spectral norm.
+
+Q: Ordinary least squares solves min ||Xw - y||^2. When X has full column rank, the solution is [E]
+- w = X^T y
+- w = (X X^T)^-1 X y
+* w = (X^T X)^-1 X^T y
+- w = X^-1 y
+> Setting the gradient 2 X^T (Xw - y) to zero gives the normal equations X^T X w = X^T y.
+
+Q: Why is solving the normal equations by explicitly inverting X^T X discouraged numerically? [M]
+- X^T X is never invertible
+* The condition number of X^T X is the square of that of X, amplifying round-off error
+- It costs O(n^4) time
+- The inverse does not exist for tall matrices
+> cond(X^T X) = cond(X)^2, so precision is lost. QR or SVD based solvers work on X directly and are more stable.
+
+Q: The condition number of a matrix (in the 2-norm) is [M]
+- the ratio of its largest to smallest eigenvalue in absolute value, for any matrix
+* the ratio of its largest to smallest singular value
+- the product of its singular values
+- its determinant divided by its trace
+> kappa(A) = sigma_max / sigma_min. The eigenvalue ratio coincides with this only for normal matrices such as symmetric ones.
+
+Q: What is the gradient of f(x) = x^T A x with respect to x for a general square A? [M]
+- A x
+- 2 A x
+* (A + A^T) x
+- x^T A
+> Differentiating gives A x + A^T x. It reduces to 2 A x only when A is symmetric.
+
+Q: If Q is an orthogonal matrix, which statement is false? [E]
+- Q^T Q = I
+- ||Qx|| = ||x|| for every x
+- det(Q) is +1 or -1
+* All eigenvalues of Q are real
+> Orthogonal matrices preserve length and have determinant +-1, but their eigenvalues lie on the complex unit circle; a 2-D rotation has complex eigenvalues.
+
+Q: The trace of a square matrix equals [E]
+- the product of its eigenvalues
+* the sum of its eigenvalues
+- its largest singular value
+- its rank
+> trace = sum of eigenvalues (with multiplicity); the determinant is their product.
+
+Q: A is n x n with eigenvalue 0. Which of the following is necessarily true? [E]
+- A is the zero matrix
+- A is symmetric
+* A is singular
+- A has rank 0
+> An eigenvalue of 0 means Av = 0 for some non-zero v, so det(A) = 0 and A is not invertible.
+
+Q: The projection of vector b onto the column space of a full-column-rank matrix A is [M]
+- A^T b
+* A (A^T A)^-1 A^T b
+- (A^T A)^-1 A^T b
+- A A^T b
+> P = A (A^T A)^-1 A^T is the orthogonal projector onto col(A). Without the middle inverse, A A^T is a projector only when A has orthonormal columns.
+
+Q: Which of the following is true of the L1, L2 and L-infinity norms of any vector x in R^n? [M]
+- ||x||_1 <= ||x||_2 <= ||x||_inf
+* ||x||_inf <= ||x||_2 <= ||x||_1
+- ||x||_2 <= ||x||_inf <= ||x||_1
+- No fixed ordering exists
+> The p-norm is non-increasing in p, so the max norm is the smallest and the L1 norm the largest.
+
+Q: The Hessian of a twice-differentiable function at a strict local minimum where it is non-singular is [M]
+- negative definite
+- indefinite
+* positive definite
+- orthogonal
+> At a minimum the Hessian is positive semi-definite; if it is also non-singular, all eigenvalues are strictly positive.
+
+Q: PCA on centered data X (n samples x d features) can be computed from the SVD X = U S V^T. The principal directions are [M]
+- the columns of U
+* the columns of V
+- the diagonal of S
+- the rows of U S
+> The covariance X^T X / (n-1) = V S^2 V^T / (n-1), so its eigenvectors are the right singular vectors. U S gives the projected coordinates (scores).
+
+Q: The Jacobian of the softmax function s = softmax(z) is [H]
+- diag(s)
+- s s^T
+* diag(s) - s s^T
+- I - s s^T
+> ds_i/dz_j = s_i (delta_ij - s_j), which in matrix form is diag(s) - s s^T. It is symmetric, PSD and has rows summing to zero.
+
+Q: Which decomposition is the usual choice for solving A x = b when A is symmetric positive definite? [M]
+- LU with full pivoting
+* Cholesky
+- Eigendecomposition
+- Jordan form
+> Cholesky (A = L L^T) needs about half the work of LU, requires no pivoting and is numerically stable for SPD matrices.
+
+Q: The nuclear norm of a matrix is [M]
+- its largest singular value
+* the sum of its singular values
+- the square root of the sum of squared entries
+- the number of non-zero singular values
+> The nuclear (trace) norm sums the singular values and is the convex surrogate of rank. The largest singular value is the spectral norm; root-sum-of-squares is the Frobenius norm.
+
+Q: For matrices A (m x n) and B (n x m), which identity always holds? [M]
+- AB = BA
+- det(AB) = det(BA)
+* trace(AB) = trace(BA)
+- rank(AB) = rank(BA)
+> The cyclic property of the trace holds for any compatible shapes. AB and BA even have different sizes when m != n, and their ranks and determinants can differ.
+
+Q: Power iteration on a matrix A, repeatedly applying x <- A x / ||A x||, converges (under mild conditions) to [M]
+- the eigenvector with the smallest eigenvalue
+* the eigenvector whose eigenvalue has the largest magnitude
+- the null space of A
+- the first row of A
+> Components along the dominant eigenvector grow fastest. The rate depends on the gap |lambda_2 / lambda_1|.
+
+Q: A weight matrix W in a linear layer is replaced by W + B A, where B is d x r and A is r x k with r much smaller than d and k. The update B A has rank [E]
+- exactly min(d, k)
+* at most r
+- exactly d + k
+- at least r + 1
+> A product through an r-dimensional bottleneck has rank at most r. This is the idea behind low-rank adaptation (LoRA).
+
+Q: What is the derivative of log det(X) with respect to X for an invertible matrix X? [H]
+- X
+- X^T
+* (X^-1)^T
+- det(X) X^-1
+> d log det(X) = trace(X^-1 dX), so the gradient is X^-T. This identity appears in Gaussian log-likelihoods and normalizing flows.
+
+Q: Two non-zero vectors have cosine similarity 0. Which statement is true? [E]
+* They are orthogonal
+- They are identical up to scale
+- They point in opposite directions
+- Their Euclidean distance is 0
+> Cosine similarity is the normalized dot product; zero means the vectors are perpendicular.
+
+Q: Multiplying an n x n dense matrix by another n x n dense matrix with the standard algorithm, and solving a dense n x n linear system by LU, both cost [E]
+- O(n^2)
+- O(n^2 log n)
+* O(n^3)
+- O(2^n)
+> Both are cubic in n with classical algorithms, which is why large models avoid explicit inverses and prefer structured or iterative methods.

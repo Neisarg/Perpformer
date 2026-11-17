@@ -1,0 +1,178 @@
+# topic: LLM Concepts
+# id: llm
+# subtopics: Pretraining objectives and scaling; Sampling and decoding (temperature, top-k, top-p); Prompting, in-context learning and chain of thought; Retrieval-augmented generation; Post-training (SFT, RLHF, DPO, GRPO, RLVR); Hallucination, calibration and evaluation; Context windows, structured output and prompt caching; Multimodal LLMs; Safety and prompt injection
+
+Q: Decoder-only LLMs such as GPT are pretrained with which objective? [E]
+- Masked language modeling
+* Next-token prediction (causal language modeling)
+- Contrastive image-text matching
+- Denoising of shuffled sentences
+> The model maximizes the likelihood of each token given all preceding tokens.
+
+Q: Raising the sampling temperature above 1 [E]
+- makes the output deterministic
+* flattens the next-token distribution, increasing diversity and randomness
+- sharpens the distribution toward the most likely token
+- changes the model's weights
+> Logits are divided by T before the softmax. T < 1 sharpens the distribution; T approaching 0 gives greedy decoding.
+
+Q: Nucleus (top-p) sampling with p = 0.9 samples from [M]
+- the 90 most likely tokens
+* the smallest set of most likely tokens whose cumulative probability reaches 0.9, renormalized
+- tokens whose individual probability exceeds 0.9
+- the least likely 10% of tokens
+> The candidate set adapts to the shape of the distribution: small when the model is confident, large when it is uncertain. Top-k uses a fixed-size set.
+
+Q: In-context learning refers to [E]
+- fine-tuning on a small dataset
+* the model performing a new task from instructions or examples in the prompt, with no weight updates
+- learning during the pretraining phase only
+- retrieval from a vector database
+> Few-shot examples condition the forward pass; the parameters are unchanged.
+
+Q: Retrieval-augmented generation (RAG) primarily helps with [E]
+- reducing the model's parameter count
+* grounding answers in external, up-to-date or private documents supplied in the context
+- making the tokenizer faster
+- eliminating the need for a prompt
+> Relevant passages are retrieved (often by embedding similarity) and inserted into the prompt, reducing hallucination and adding knowledge without retraining.
+
+Q: In a RAG pipeline, a cross-encoder reranker is used after first-stage retrieval because [M]
+- it is faster than a bi-encoder
+* it scores each query-document pair jointly and more accurately, but is too slow to run over the whole corpus
+- it removes the need for embeddings
+- it compresses documents
+> Bi-encoders embed queries and documents separately for fast approximate search; a cross-encoder then re-scores the top candidates with full attention between query and passage.
+
+Q: Hybrid search in RAG combines [M]
+- two different LLMs
+* sparse lexical retrieval (such as BM25) with dense embedding retrieval
+- fine-tuning with prompting
+- images with text
+> Lexical search handles exact terms, identifiers and rare words; dense search captures paraphrase. Their rankings are fused, for example with reciprocal rank fusion.
+
+Q: RLHF with PPO, as used for early chat models, involves [M]
+- supervised training on human-written answers only
+* training a reward model from human preference comparisons, then optimizing the policy against it with a KL penalty to stay near the original model
+- pruning the model using human feedback
+- asking humans to label each token
+> Pairwise preferences train the reward model; PPO then maximizes predicted reward, with a KL term preventing drift from the supervised policy.
+
+Q: Direct Preference Optimization (DPO) differs from PPO-based RLHF in that it [H]
+- needs no preference data
+* optimizes the policy directly on preference pairs with a classification-style loss, without a separate reward model or RL rollouts
+- requires an online environment
+- trains the reward model twice
+> DPO derives a closed-form loss from the KL-constrained reward maximization objective: it raises the log-probability ratio of preferred over rejected responses relative to a frozen reference model.
+
+Q: GRPO, used for training reasoning models with verifiable rewards, estimates the advantage of a sampled response by [H]
+- a learned value network
+* comparing its reward with the mean (and standard deviation) of rewards of a group of responses sampled for the same prompt
+- human ratings of each token
+- the length of the response
+> Group Relative Policy Optimization drops the critic: several completions per prompt are scored, and rewards normalized within the group serve as advantages in a PPO-style clipped objective.
+
+Q: "Hallucination" in LLMs refers to [E]
+- slow generation
+* fluent output that is not supported by the provided context or by facts
+- refusing to answer
+- repeating the prompt
+> The model generates plausible text because it is trained to predict likely continuations, not to verify truth. Grounding, citations and abstention training mitigate it.
+
+Q: Chain-of-thought prompting improves accuracy on multi-step problems mainly because [M]
+- it increases the temperature
+* intermediate reasoning tokens give the model serial computation and a scratchpad to condition on
+- it shortens the prompt
+- it changes the tokenizer
+> A Transformer does a bounded amount of computation per token; writing out steps lets later tokens attend to earlier intermediate results.
+
+Q: Self-consistency decoding [M]
+- runs greedy decoding once
+* samples several reasoning paths and returns the most common final answer
+- averages the logits of two models
+- checks grammar
+> Majority voting over diverse sampled chains marginalizes out individual reasoning errors, at the cost of more inference.
+
+Q: Constrained (structured) decoding guarantees valid JSON by [M]
+- asking politely in the prompt
+* masking, at each step, tokens that would violate a grammar or schema before sampling
+- fine-tuning on JSON only
+- post-processing with regular expressions after generation
+> A grammar or finite-state machine tracks the valid next tokens; invalid logits are set to -inf so the output always parses.
+
+Q: Prompt caching reduces cost and latency by [M]
+- storing the final answers to frequent questions
+* reusing the computed attention states (KV cache) of a shared prompt prefix across requests
+- compressing the prompt with gzip
+- lowering the temperature
+> If many requests share a long prefix (system prompt, documents, tool definitions), its internal states are computed once; only the new suffix is processed. Any change early in the prefix invalidates the cache.
+
+Q: The "lost in the middle" effect describes [M]
+- tokens dropped by the tokenizer
+* models using information at the beginning and end of a long context more reliably than information in the middle
+- gradients vanishing in middle layers
+- middle layers being pruned
+> Retrieval accuracy within the context is often U-shaped in position, which motivates ordering the most relevant passages first or last and keeping context focused.
+
+Q: Supervised fine-tuning (SFT) of a chat model on instruction-response pairs typically computes the loss on [M]
+- all tokens including the user prompt
+* the assistant's response tokens only, masking the prompt tokens
+- the first token of each turn
+- the special tokens only
+> Loss masking focuses learning on generating responses given prompts; training on the prompt would teach the model to imitate users.
+
+Q: Why do LLMs struggle with exact arithmetic on long numbers or counting letters in words? [M]
+- They have too few parameters
+* Tokenization splits numbers and words into irregular subword pieces and the model has no built-in algorithmic working memory
+- The softmax cannot output digits
+- They are trained without numbers
+> Characters are hidden inside multi-character tokens and carries require long exact serial computation; tools such as a code interpreter solve this reliably.
+
+Q: A vision-language model like LLaVA feeds images to the LLM by [M]
+- converting the image to a text caption with OCR only
+* encoding the image with a vision encoder and projecting patch features into the LLM's token embedding space
+- training a separate LLM per image
+- concatenating raw pixel values to the logits
+> A pretrained vision encoder (often CLIP or SigLIP) produces patch embeddings; a projector maps them to "visual tokens" that the LLM attends to like text.
+
+Q: LLM-as-a-judge evaluation should be validated by [M]
+- trusting the judge with no checks
+* measuring agreement with human ratings and checking for biases such as position and verbosity preference
+- using the same model output as the reference
+- increasing the judge's temperature
+> Judges show systematic biases (order, length, self-preference). Calibrate against human labels, randomize order and use clear rubrics.
+
+Q: Indirect prompt injection is [M]
+- a user typing a jailbreak directly
+* malicious instructions hidden in content the model reads, such as a web page, email or tool result
+- an attack on the tokenizer
+- a way to reduce latency
+> The model cannot reliably separate data from instructions, so untrusted content can hijack an application; defences include privilege separation, filtering and requiring confirmation for sensitive actions.
+
+Q: Scaling laws for neural language models (Kaplan et al., Chinchilla) indicate that, for a fixed compute budget, [H]
+- only model size matters
+* model size and training tokens should be scaled together; many earlier models were under-trained for their size
+- data should be held fixed while parameters grow
+- the loss does not depend on compute
+> Chinchilla found roughly equal scaling of parameters and tokens (about 20 tokens per parameter) to be compute-optimal.
+
+Q: "Reasoning" or extended-thinking models differ from standard chat models at inference in that they [M]
+- use a different tokenizer
+* generate a (possibly hidden) chain of intermediate reasoning tokens before the final answer, trading latency and cost for accuracy
+- do not use attention
+- cannot call tools
+> Test-time compute is spent on deliberate reasoning, often trained with reinforcement learning on verifiable tasks; the thinking budget is an explicit knob.
+
+Q: When chunking documents for RAG, chunks that are too large tend to [M]
+- increase retrieval precision
+* dilute the embedding with multiple topics and waste context window, while chunks that are too small lose necessary context
+- break the tokenizer
+- make embeddings longer
+> Chunk size and overlap balance retrievability against completeness; structure-aware splitting and adding document-level context to each chunk help.
+
+Q: The context window of an LLM is [E]
+- the number of layers
+* the maximum number of tokens (prompt plus generated output) the model can attend to at once
+- the size of its vocabulary
+- the batch size used during training
+> Everything the model conditions on must fit in this window; longer contexts cost more compute and can degrade attention to relevant details.

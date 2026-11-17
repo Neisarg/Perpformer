@@ -1,0 +1,640 @@
+# topic: PEFT, Quantization & Compression
+# id: efficient
+# subtopics: LoRA adapters and merging; Affine and per-channel quantization; Straight-through estimator; Magnitude pruning; Knowledge distillation; Speculative decoding; Freezing and counting parameters
+
+=== lora-linear | LoRA Linear Layer | Medium
+--- description
+Implement `LoRALinear(base, r, alpha)`, which wraps a pretrained `nn.Linear` with a low-rank adapter.
+
+- `self.base`: the given layer, with all its parameters frozen (`requires_grad=False`)
+- `self.lora_A`: `nn.Parameter` of shape `(r, in_features)`, initialized with small random values (not all zero)
+- `self.lora_B`: `nn.Parameter` of shape `(out_features, r)`, initialized to zeros
+- `self.scaling = alpha / r`
+
+```
+forward(x) = base(x) + scaling * (x @ lora_A.T @ lora_B.T)
+```
+
+Because `lora_B` starts at zero, the wrapped layer initially behaves exactly like the base layer.
+--- starter
+import torch
+import torch.nn as nn
+
+
+class LoRALinear(nn.Module):
+    def __init__(self, base: nn.Linear, r: int = 8, alpha: float = 16.0):
+        super().__init__()
+        # TODO
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # TODO
+        pass
+--- solution
+import torch
+import torch.nn as nn
+
+
+class LoRALinear(nn.Module):
+    def __init__(self, base: nn.Linear, r: int = 8, alpha: float = 16.0):
+        super().__init__()
+        self.base = base
+        for p in self.base.parameters():
+            p.requires_grad_(False)
+        self.lora_A = nn.Parameter(torch.randn(r, base.in_features) * 0.01)
+        self.lora_B = nn.Parameter(torch.zeros(base.out_features, r))
+        self.scaling = alpha / r
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.base(x) + self.scaling * (x @ self.lora_A.T @ self.lora_B.T)
+--- tests
+def test_starts_as_base():
+    """Initially identical to the base layer"""
+    base = torch.nn.Linear(10, 6)
+    layer = LoRALinear(base, r=4, alpha=8)
+    x = torch.randn(3, 10)
+    check_close(layer(x), base(x))
+    check_true(layer.lora_A.abs().sum() > 0, "lora_A should not be all zeros")
+    check_close(layer.lora_B, torch.zeros(6, 4), name="lora_B at init")
+
+def test_trainable_parameters():
+    """Only the adapter matrices are trainable"""
+    layer = LoRALinear(torch.nn.Linear(32, 16), r=2, alpha=4)
+    trainable = sorted(n for n, p in layer.named_parameters() if p.requires_grad)
+    check_equal(trainable, ["lora_A", "lora_B"], name="trainable parameter names")
+    check_equal(sum(p.numel() for p in layer.parameters() if p.requires_grad), 2 * 32 + 16 * 2, name="trainable count")
+
+def test_formula():
+    """Output follows base(x) + (alpha / r) * x A^T B^T"""
+    base = torch.nn.Linear(8, 5)
+    layer = LoRALinear(base, r=3, alpha=6)
+    with torch.no_grad():
+        layer.lora_B.copy_(torch.randn(5, 3))
+    x = torch.randn(4, 7, 8)
+    expected = base(x) + 2.0 * (x @ layer.lora_A.T @ layer.lora_B.T)
+    check_close(layer(x), expected, tol=1e-5)
+    check_close(layer.scaling, 2.0, name="scaling")
+
+def test_gradients():
+    """Gradients reach the adapter but not the frozen base"""
+    layer = LoRALinear(torch.nn.Linear(6, 6), r=2, alpha=2)
+    with torch.no_grad():
+        layer.lora_B.copy_(torch.randn(6, 2))
+    layer(torch.randn(5, 6)).pow(2).sum().backward()
+    check_true(layer.lora_A.grad is not None and layer.lora_A.grad.abs().sum() > 0, "lora_A received no gradient")
+    check_true(layer.lora_B.grad is not None and layer.lora_B.grad.abs().sum() > 0, "lora_B received no gradient")
+    check_true(layer.base.weight.grad is None, "the base weight must stay frozen")
+--- hints
+- Freeze with p.requires_grad_(False) for every base parameter.
+- Zero-initializing B makes the update B @ A zero at the start.
+
+=== lora-merge | Merging LoRA Weights | Easy
+--- description
+After training, a LoRA update can be folded into the base weight so inference has no extra cost.
+
+Implement `merge_lora(weight, lora_A, lora_B, alpha)`:
+
+- `weight`: `(out, in)` base weight
+- `lora_A`: `(r, in)`, `lora_B`: `(out, r)`
+- returns `weight + (alpha / r) * lora_B @ lora_A` as a new tensor
+
+Also implement `unmerge_lora(merged, lora_A, lora_B, alpha)` that recovers the original weight.
+--- starter
+import torch
+
+
+def merge_lora(weight: torch.Tensor, lora_A: torch.Tensor, lora_B: torch.Tensor, alpha: float) -> torch.Tensor:
+    # TODO
+    pass
+
+
+def unmerge_lora(merged: torch.Tensor, lora_A: torch.Tensor, lora_B: torch.Tensor, alpha: float) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def merge_lora(weight: torch.Tensor, lora_A: torch.Tensor, lora_B: torch.Tensor, alpha: float) -> torch.Tensor:
+    r = lora_A.shape[0]
+    return weight + (alpha / r) * (lora_B @ lora_A)
+
+
+def unmerge_lora(merged: torch.Tensor, lora_A: torch.Tensor, lora_B: torch.Tensor, alpha: float) -> torch.Tensor:
+    r = lora_A.shape[0]
+    return merged - (alpha / r) * (lora_B @ lora_A)
+--- tests
+def test_equivalent_forward():
+    """The merged weight reproduces base + adapter outputs"""
+    W, A, B = torch.randn(5, 8), torch.randn(2, 8), torch.randn(5, 2)
+    x = torch.randn(7, 8)
+    expected = x @ W.T + (6.0 / 2) * (x @ A.T @ B.T)
+    check_close(x @ merge_lora(W, A, B, 6.0).T, expected, tol=1e-4)
+
+def test_rank():
+    """The update has rank at most r"""
+    W, A, B = torch.zeros(12, 12, dtype=torch.float64), torch.randn(3, 12, dtype=torch.float64), torch.randn(12, 3, dtype=torch.float64)
+    delta = merge_lora(W, A, B, 3.0)
+    check_equal(int(torch.linalg.matrix_rank(delta)), 3, name="rank of the update")
+
+def test_round_trip():
+    """unmerge undoes merge, and the input weight is not modified"""
+    W, A, B = torch.randn(4, 6), torch.randn(2, 6), torch.randn(4, 2)
+    before = W.clone()
+    merged = merge_lora(W, A, B, 8.0)
+    check_equal(W, before, name="original weight")
+    check_close(unmerge_lora(merged, A, B, 8.0), W, tol=1e-5)
+
+def test_zero_b():
+    """A zero B leaves the weight unchanged"""
+    W, A = torch.randn(3, 5), torch.randn(4, 5)
+    check_close(merge_lora(W, A, torch.zeros(3, 4), 16.0), W)
+--- hints
+- The rank r is lora_A.shape[0].
+- delta = (alpha / r) * lora_B @ lora_A has the same shape as the weight.
+
+=== affine-quantization | Uniform Affine Quantization | Medium
+--- description
+Implement asymmetric uniform quantization to unsigned integers.
+
+`quantize_affine(x, num_bits=8)` returns `(q, scale, zero_point)`:
+
+```
+qmin, qmax = 0, 2 ** num_bits - 1
+x_min, x_max = min(x.min(), 0), max(x.max(), 0)        # the range must include 0
+scale = (x_max - x_min) / (qmax - qmin)                 # use 1.0 if the range is zero
+zero_point = round(qmin - x_min / scale), clamped to [qmin, qmax]
+q = clamp(round(x / scale) + zero_point, qmin, qmax)
+```
+
+`q` is an integer tensor (`torch.long`), `scale` a float and `zero_point` an int.
+
+`dequantize(q, scale, zero_point)` returns `scale * (q - zero_point)` as a float tensor.
+--- starter
+import torch
+
+
+def quantize_affine(x: torch.Tensor, num_bits: int = 8):
+    # TODO
+    pass
+
+
+def dequantize(q: torch.Tensor, scale: float, zero_point: int) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def quantize_affine(x: torch.Tensor, num_bits: int = 8):
+    qmin, qmax = 0, 2 ** num_bits - 1
+    x_min = min(x.min().item(), 0.0)
+    x_max = max(x.max().item(), 0.0)
+    scale = (x_max - x_min) / (qmax - qmin)
+    if scale == 0:
+        scale = 1.0
+    zero_point = int(round(qmin - x_min / scale))
+    zero_point = max(qmin, min(qmax, zero_point))
+    q = torch.clamp(torch.round(x / scale) + zero_point, qmin, qmax).long()
+    return q, scale, zero_point
+
+
+def dequantize(q: torch.Tensor, scale: float, zero_point: int) -> torch.Tensor:
+    return scale * (q.float() - zero_point)
+--- tests
+def test_simple_range():
+    """Values 0 .. 2.55 with 8 bits use a step of 0.01"""
+    x = torch.tensor([0.0, 1.0, 2.0, 2.55])
+    q, scale, zp = quantize_affine(x, 8)
+    check_close(scale, 0.01, tol=1e-6, name="scale")
+    check_equal(int(zp), 0, name="zero_point")
+    check_equal(q, torch.tensor([0, 100, 200, 255]), name="q")
+
+def test_round_trip_error():
+    """Reconstruction error is at most half a step"""
+    x = torch.randn(1000) * 3
+    q, scale, zp = quantize_affine(x, 8)
+    check_true(q.min() >= 0 and q.max() <= 255, "q outside [0, 255]")
+    err = (dequantize(q, scale, zp) - x).abs().max().item()
+    check_true(err <= scale / 2 + 1e-5, "max error %.5f exceeds half a step %.5f" % (err, scale / 2))
+
+def test_zero_is_exact():
+    """Real zero maps exactly to the zero point"""
+    x = torch.tensor([-1.3, 0.0, 0.7, 2.9])
+    q, scale, zp = quantize_affine(x, 8)
+    check_equal(int(q[1]), int(zp), name="q of 0.0")
+    check_close(dequantize(q, scale, zp)[1], 0.0, name="dequantized zero")
+
+def test_positive_only_range_includes_zero():
+    """A strictly positive tensor still uses a range starting at 0"""
+    x = torch.tensor([10.0, 30.0])
+    q, scale, zp = quantize_affine(x, 4)
+    check_equal(int(zp), 0, name="zero_point")
+    check_close(scale, 2.0, tol=1e-5, name="scale")
+    check_equal(q, torch.tensor([5, 15]), name="q")
+
+def test_constant_zero_tensor():
+    """An all-zero tensor does not divide by zero"""
+    q, scale, zp = quantize_affine(torch.zeros(4), 8)
+    check_close(dequantize(q, scale, zp), torch.zeros(4))
+
+def test_fewer_bits_more_error():
+    """4-bit quantization has a larger error than 8-bit"""
+    x = torch.randn(500)
+    e8 = (dequantize(*quantize_affine(x, 8)) - x).abs().mean()
+    e4 = (dequantize(*quantize_affine(x, 4)) - x).abs().mean()
+    check_true(e4 > 4 * e8, "expected a much larger error at 4 bits")
+--- hints
+- Extending the range to include 0 guarantees that real zero is exactly representable.
+- Remember to clamp after adding the zero point.
+
+=== per-channel-quantization | Symmetric Per-Channel Quantization | Medium
+--- description
+Weights are usually quantized symmetrically with one scale per output channel.
+
+Implement `quantize_per_channel(w, num_bits=8)` for a weight matrix `w` of shape `(out, in)`:
+
+```
+qmax = 2 ** (num_bits - 1) - 1                 # 127 for 8 bits
+scale[i] = max(|w[i, :]|) / qmax               # use 1.0 for an all-zero row
+q[i, :] = clamp(round(w[i, :] / scale[i]), -qmax, qmax)
+```
+
+Return `(q, scales)` where `q` is a `torch.long` tensor shaped like `w` and `scales` is a float tensor of shape `(out,)`. The dequantized weight is `q * scales[:, None]`.
+--- starter
+import torch
+
+
+def quantize_per_channel(w: torch.Tensor, num_bits: int = 8):
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def quantize_per_channel(w: torch.Tensor, num_bits: int = 8):
+    qmax = 2 ** (num_bits - 1) - 1
+    max_abs = w.abs().max(dim=1).values
+    scales = torch.where(max_abs > 0, max_abs / qmax, torch.ones_like(max_abs))
+    q = torch.clamp(torch.round(w / scales.unsqueeze(1)), -qmax, qmax).long()
+    return q, scales
+--- tests
+def test_scales_and_range():
+    """One scale per row; the largest entry of each row maps to +-qmax"""
+    w = torch.tensor([[0.5, -1.0, 0.25], [10.0, 20.0, -5.0]])
+    q, scales = quantize_per_channel(w, 8)
+    check_close(scales, [1.0 / 127, 20.0 / 127], name="scales")
+    check_equal(q[0, 1].item(), -127, name="q of the row minimum")
+    check_equal(q[1, 1].item(), 127, name="q of the row maximum")
+    check_true(q.dtype == torch.long, "q must be torch.long")
+
+def test_error_bound():
+    """Per-row error is at most half of that row's step"""
+    w = torch.randn(16, 64) * torch.logspace(-2, 2, 16).unsqueeze(1)
+    q, scales = quantize_per_channel(w, 8)
+    err = (q * scales.unsqueeze(1) - w).abs().max(dim=1).values
+    check_true(bool((err <= scales * 0.5005 + 1e-6).all()), "error exceeds half a step in some row")
+
+def test_better_than_per_tensor():
+    """Rows with small ranges keep their precision"""
+    w = torch.randn(8, 32) * torch.logspace(-3, 1, 8).unsqueeze(1)
+    q, scales = quantize_per_channel(w, 8)
+    per_channel = (q * scales.unsqueeze(1) - w)[0].abs().mean()
+    s = w.abs().max() / 127
+    per_tensor = (torch.round(w / s) * s - w)[0].abs().mean()
+    check_true(per_channel < 0.1 * per_tensor, "per-channel error on the smallest row should be far lower")
+
+def test_zero_row():
+    """An all-zero row gets scale 1 and zeros"""
+    w = torch.tensor([[0.0, 0.0], [1.0, -4.0]])
+    q, scales = quantize_per_channel(w, 4)
+    check_close(scales, [1.0, 4.0 / 7], name="scales")
+    check_equal(q, torch.tensor([[0, 0], [2, -7]]), name="q")
+--- hints
+- Take the max absolute value per row with w.abs().max(dim=1).
+- Divide by scales.unsqueeze(1), round, clamp to [-qmax, qmax]; use torch.where to avoid dividing by zero.
+
+=== fake-quantize-ste | Fake Quantization with a Straight-Through Estimator | Hard
+--- description
+Quantization-aware training simulates quantization in the forward pass while letting gradients through.
+
+Implement `fake_quantize(x, scale, zero_point, qmin, qmax)`:
+
+- **forward**: `scale * (clamp(round(x / scale) + zero_point, qmin, qmax) - zero_point)`
+- **backward** (straight-through estimator): the gradient with respect to `x` is 1 where the un-clamped integer `round(x / scale) + zero_point` lies in `[qmin, qmax]`, and 0 where the value was clipped
+
+Do not use `torch.fake_quantize_per_tensor_affine`. The usual trick is `y = x + (quantized(x) - x).detach()`, combined with a mask for the clipped entries.
+--- starter
+import torch
+
+
+def fake_quantize(x: torch.Tensor, scale: float, zero_point: int, qmin: int, qmax: int) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def fake_quantize(x: torch.Tensor, scale: float, zero_point: int, qmin: int, qmax: int) -> torch.Tensor:
+    q_raw = torch.round(x / scale) + zero_point
+    q = torch.clamp(q_raw, qmin, qmax)
+    dq = scale * (q - zero_point)
+    inside = ((q_raw >= qmin) & (q_raw <= qmax)).to(x.dtype)
+    passthrough = x * inside
+    return passthrough + (dq - passthrough).detach()
+--- tests
+def test_forward_matches_builtin():
+    """Forward values match torch.fake_quantize_per_tensor_affine"""
+    x = torch.randn(200) * 2
+    out = fake_quantize(x, 0.05, 10, 0, 255)
+    ref = torch.fake_quantize_per_tensor_affine(x, 0.05, 10, 0, 255)
+    check_close(out, ref, tol=1e-5)
+
+def test_values_on_grid():
+    """Outputs are multiples of the scale within the clamp range"""
+    x = torch.linspace(-3, 3, 61) + 0.013
+    out = fake_quantize(x, 0.25, 0, -4, 3)
+    check_close(out / 0.25, torch.round(out / 0.25), tol=1e-4, name="output / scale")
+    check_true(out.min() >= -1.0 - 1e-6 and out.max() <= 0.75 + 1e-6, "outputs outside the representable range")
+
+def test_gradient_ste():
+    """Gradient is 1 inside the range and 0 where the input is clipped"""
+    x = torch.tensor([-5.0, -0.3, 0.02, 0.4, 5.0], requires_grad=True)
+    fake_quantize(x, 0.1, 0, -10, 10).sum().backward()
+    check_close(x.grad, [0.0, 1.0, 1.0, 1.0, 0.0], name="gradient")
+
+def test_gradient_matches_builtin():
+    """Gradients match the built-in on random data"""
+    x = (torch.randn(300) * 4).requires_grad_(True)
+    fake_quantize(x, 0.1, 3, -20, 20).pow(2).sum().backward()
+    x2 = x.detach().clone().requires_grad_(True)
+    torch.fake_quantize_per_tensor_affine(x2, 0.1, 3, -20, 20).pow(2).sum().backward()
+    check_close(x.grad, x2.grad, tol=1e-4, name="gradient")
+--- hints
+- torch.round has zero gradient; hide it inside .detach() so only the identity path carries gradient.
+- Multiply x by a 0/1 mask of the unclipped entries before applying the trick, so clipped inputs get zero gradient.
+
+=== magnitude-pruning | Magnitude Pruning | Easy
+--- description
+Implement `magnitude_prune(weight, sparsity)`.
+
+Zero out the `k = int(sparsity * weight.numel())` entries with the smallest absolute value (over the whole tensor). Return `(pruned, mask)` where `mask` is a boolean tensor that is True for kept entries and `pruned = weight * mask`. Do not modify `weight` in place.
+
+You may assume no two entries have the same absolute value.
+--- starter
+import torch
+
+
+def magnitude_prune(weight: torch.Tensor, sparsity: float):
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def magnitude_prune(weight: torch.Tensor, sparsity: float):
+    k = int(sparsity * weight.numel())
+    if k == 0:
+        mask = torch.ones_like(weight, dtype=torch.bool)
+    else:
+        threshold = weight.abs().flatten().kthvalue(k).values
+        mask = weight.abs() > threshold
+    return weight * mask, mask
+--- tests
+def test_basic():
+    """Half of the entries are removed, smallest magnitudes first"""
+    w = torch.tensor([[0.1, -2.0], [0.5, -0.05]])
+    pruned, mask = magnitude_prune(w, 0.5)
+    check_equal(mask, torch.tensor([[False, True], [True, False]]), name="mask")
+    check_close(pruned, [[0.0, -2.0], [0.5, 0.0]], name="pruned")
+
+def test_exact_sparsity():
+    """Exactly int(sparsity * n) entries are zeroed"""
+    w = torch.randn(20, 30)
+    pruned, mask = magnitude_prune(w, 0.9)
+    check_equal(int((~mask).sum()), 540, name="number of pruned entries")
+    check_true(w[mask].abs().min() > w[~mask].abs().max(), "a kept entry is smaller than a pruned one")
+    check_close(pruned, w * mask, name="pruned")
+
+def test_extremes():
+    """Sparsity 0 keeps everything; sparsity 1 removes everything"""
+    w = torch.randn(4, 4)
+    pruned, mask = magnitude_prune(w, 0.0)
+    check_close(pruned, w, name="sparsity 0")
+    pruned, mask = magnitude_prune(w, 1.0)
+    check_close(pruned, torch.zeros(4, 4), name="sparsity 1")
+
+def test_no_mutation():
+    """The input is not modified and the mask is boolean"""
+    w = torch.randn(5, 5)
+    before = w.clone()
+    _, mask = magnitude_prune(w, 0.4)
+    check_equal(w, before, name="input weight")
+    check_true(mask.dtype == torch.bool, "mask must be boolean")
+--- hints
+- kthvalue(k) on the flattened absolute values gives the pruning threshold.
+
+=== distillation-loss | Knowledge Distillation Loss | Medium
+--- description
+Implement the Hinton distillation loss:
+
+```
+soft = KL( softmax(teacher / T) || softmax(student / T) )     averaged over the batch
+hard = cross_entropy(student, targets)
+loss = alpha * T ** 2 * soft + (1 - alpha) * hard
+```
+
+`distillation_loss(student_logits, teacher_logits, targets, T, alpha)` takes logits of shape `(N, C)` and class indices `(N,)` and returns a scalar tensor. The KL term is summed over classes and averaged over the `N` examples. No gradient should flow into the teacher logits.
+--- starter
+import torch
+import torch.nn.functional as F
+
+
+def distillation_loss(student_logits, teacher_logits, targets, T: float = 2.0, alpha: float = 0.5) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn.functional as F
+
+
+def distillation_loss(student_logits, teacher_logits, targets, T: float = 2.0, alpha: float = 0.5) -> torch.Tensor:
+    log_p_student = F.log_softmax(student_logits / T, dim=-1)
+    p_teacher = F.softmax(teacher_logits.detach() / T, dim=-1)
+    soft = F.kl_div(log_p_student, p_teacher, reduction="batchmean")
+    hard = F.cross_entropy(student_logits, targets)
+    return alpha * T * T * soft + (1 - alpha) * hard
+--- tests
+def _ref(s, t, y, T, alpha):
+    log_ps = torch.log_softmax(s / T, -1)
+    pt = torch.softmax(t / T, -1)
+    soft = (pt * (torch.log(pt) - log_ps)).sum(-1).mean()
+    return alpha * T * T * soft + (1 - alpha) * torch.nn.functional.cross_entropy(s, y)
+
+def test_reference():
+    """Matches the definition"""
+    s, t, y = torch.randn(8, 6), torch.randn(8, 6), torch.randint(0, 6, (8,))
+    check_close(distillation_loss(s, t, y, T=3.0, alpha=0.7), _ref(s, t, y, 3.0, 0.7))
+
+def test_alpha_zero_is_cross_entropy():
+    """alpha = 0 leaves only the hard-label loss"""
+    s, t, y = torch.randn(5, 4), torch.randn(5, 4), torch.randint(0, 4, (5,))
+    check_close(distillation_loss(s, t, y, T=4.0, alpha=0.0), torch.nn.functional.cross_entropy(s, y))
+
+def test_identical_logits():
+    """Student equal to teacher gives zero soft loss"""
+    s, y = torch.randn(5, 4), torch.randint(0, 4, (5,))
+    check_close(distillation_loss(s, s.clone(), y, T=2.0, alpha=1.0), 0.0, tol=1e-5)
+
+def test_no_teacher_gradient():
+    """Gradients flow to the student only"""
+    s = torch.randn(4, 5, requires_grad=True)
+    t = torch.randn(4, 5, requires_grad=True)
+    distillation_loss(s, t, torch.randint(0, 5, (4,)), T=2.0, alpha=0.5).backward()
+    check_true(s.grad is not None and s.grad.abs().sum() > 0, "the student received no gradient")
+    check_true(t.grad is None or float(t.grad.abs().sum()) == 0.0, "the teacher must not receive gradient")
+--- hints
+- Soften both distributions by dividing the logits by T.
+- F.kl_div expects log-probabilities of the student and probabilities of the teacher; use reduction='batchmean' and detach the teacher.
+
+=== speculative-decoding | Speculative Decoding Acceptance Rule | Hard
+--- description
+In speculative decoding, a small draft model proposes a token `x` sampled from its distribution `q`, and the large target model with distribution `p` verifies it so that the final samples follow `p` exactly.
+
+Implement `speculative_step(p, q, x, u)`:
+
+- `p`, `q`: 1-D probability tensors over the vocabulary; `x`: the drafted token id (with `q[x] > 0`); `u`: a uniform random number in `[0, 1)`
+- accept `x` if `u < min(1, p[x] / q[x])`
+- on rejection, the replacement token must be sampled from the residual distribution `max(p - q, 0)` normalized to sum to 1
+
+Return `(True, None)` when the token is accepted and `(False, residual)` when it is rejected, where `residual` is the normalized residual distribution (a tensor shaped like `p`).
+--- starter
+import torch
+
+
+def speculative_step(p: torch.Tensor, q: torch.Tensor, x: int, u: float):
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def speculative_step(p: torch.Tensor, q: torch.Tensor, x: int, u: float):
+    ratio = min(1.0, (p[x] / q[x]).item())
+    if u < ratio:
+        return True, None
+    residual = torch.clamp(p - q, min=0)
+    return False, residual / residual.sum()
+--- tests
+P = torch.tensor([0.5, 0.3, 0.2])
+Q = torch.tensor([0.2, 0.2, 0.6])
+
+def test_always_accept_when_target_agrees():
+    """p[x] >= q[x] is always accepted"""
+    for u in (0.0, 0.5, 0.999):
+        accepted, residual = speculative_step(P, Q, 0, u)
+        check_true(bool(accepted) and residual is None, "token 0 must be accepted for u = %s" % u)
+
+def test_partial_acceptance():
+    """p[x] / q[x] = 1/3 is the acceptance probability for token 2"""
+    accepted, _ = speculative_step(P, Q, 2, 0.30)
+    check_true(bool(accepted), "u = 0.30 < 1/3 should accept")
+    accepted, residual = speculative_step(P, Q, 2, 0.40)
+    check_true(not bool(accepted), "u = 0.40 > 1/3 should reject")
+    check_close(residual, [0.75, 0.25, 0.0], name="residual distribution")
+
+def test_residual_sums_to_one():
+    """The residual is a valid distribution"""
+    p = torch.softmax(torch.randn(10), 0)
+    q = torch.softmax(torch.randn(10), 0)
+    x = int((q - p).argmax())
+    accepted, residual = speculative_step(p, q, x, 0.9999)
+    check_true(not bool(accepted), "expected a rejection")
+    check_close(residual.sum(), 1.0, name="sum of residual")
+    check_true(residual.min() >= 0, "residual has negative entries")
+
+def test_output_follows_target_distribution():
+    """Simulated sampling reproduces the target distribution p"""
+    g = torch.Generator().manual_seed(0)
+    n = 6000
+    drafts = torch.multinomial(Q, n, replacement=True, generator=g)
+    us = torch.rand(n, generator=g)
+    counts = torch.zeros(3)
+    for x, u in zip(drafts.tolist(), us.tolist()):
+        accepted, residual = speculative_step(P, Q, x, u)
+        if accepted:
+            counts[x] += 1
+        else:
+            counts[int(torch.multinomial(residual, 1, generator=g))] += 1
+    check_close(counts / n, P, tol=0.025, name="empirical distribution of emitted tokens")
+--- hints
+- Accept with probability min(1, p[x] / q[x]).
+- The residual max(p - q, 0), once normalized, exactly compensates for the probability mass the draft over-proposed.
+
+=== freeze-and-count | Freezing Layers and Counting Parameters | Easy
+--- description
+Implement two utilities used when fine-tuning.
+
+`freeze_except(model, keywords)`: set `requires_grad=False` on every parameter whose name (from `model.named_parameters()`) does not contain any of the strings in `keywords`, and `requires_grad=True` on those that do.
+
+`count_parameters(model)`: return `(trainable, total)` as ints.
+--- starter
+import torch.nn as nn
+
+
+def freeze_except(model: nn.Module, keywords) -> None:
+    # TODO
+    pass
+
+
+def count_parameters(model: nn.Module):
+    # TODO
+    pass
+--- solution
+import torch.nn as nn
+
+
+def freeze_except(model: nn.Module, keywords) -> None:
+    for name, p in model.named_parameters():
+        p.requires_grad_(any(k in name for k in keywords))
+
+
+def count_parameters(model: nn.Module):
+    total = sum(p.numel() for p in model.parameters())
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return trainable, total
+--- tests
+def _model():
+    m = torch.nn.Module()
+    m.backbone = torch.nn.Sequential(torch.nn.Linear(10, 20), torch.nn.ReLU(), torch.nn.Linear(20, 20))
+    m.norm = torch.nn.LayerNorm(20)
+    m.head = torch.nn.Linear(20, 3)
+    return m
+
+def test_count_all():
+    """Everything is trainable by default"""
+    trainable, total = count_parameters(_model())
+    expected = (10 * 20 + 20) + (20 * 20 + 20) + 40 + (20 * 3 + 3)
+    check_equal(total, expected, name="total")
+    check_equal(trainable, expected, name="trainable")
+
+def test_freeze_backbone():
+    """Only the head stays trainable"""
+    m = _model()
+    freeze_except(m, ["head"])
+    trainable, total = count_parameters(m)
+    check_equal(trainable, 63, name="trainable")
+    check_true(not m.backbone[0].weight.requires_grad, "the backbone should be frozen")
+    check_true(m.head.weight.requires_grad and m.head.bias.requires_grad, "the head should be trainable")
+
+def test_multiple_keywords_and_unfreeze():
+    """Several keywords; previously frozen parameters can be re-enabled"""
+    m = _model()
+    freeze_except(m, [])
+    check_equal(count_parameters(m)[0], 0, name="trainable after freezing everything")
+    freeze_except(m, ["norm", "bias"])
+    trainable, _ = count_parameters(m)
+    check_equal(trainable, 40 + 20 + 20 + 3, name="trainable with norm and biases")
+--- hints
+- Iterate over model.named_parameters() and call p.requires_grad_(flag).
+- any(k in name for k in keywords) decides the flag.
+

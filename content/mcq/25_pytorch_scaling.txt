@@ -1,0 +1,178 @@
+# topic: PyTorch & Training at Scale
+# id: pytorch
+# subtopics: Tensors, views and broadcasting; Autograd mechanics; nn.Module, optimizers and the training loop; Data loading; Mixed precision and memory; Distributed training (DDP, gradient accumulation, sharding); Compilation, profiling and debugging; Checkpointing and reproducibility
+
+Q: In a standard PyTorch training loop, optimizer.zero_grad() is needed because [E]
+- gradients are deleted automatically after each step
+* gradients accumulate in .grad across backward() calls by default
+- it resets the learning rate
+- it clears the model's weights
+> backward() adds to existing .grad buffers, so stale gradients must be cleared (or deliberately accumulated) each step.
+
+Q: Tensors a of shape (3, 1) and b of shape (4,) are added. The result has shape [E]
+- (3, 1)
+- (4,)
+* (3, 4)
+- an error is raised
+> Broadcasting aligns shapes from the right: (3, 1) and (1, 4) expand to (3, 4).
+
+Q: torch.no_grad() is used during evaluation to [E]
+- switch dropout off
+* disable gradient tracking, saving memory and computation
+- move the model to the CPU
+- change BatchNorm to use running statistics
+> It affects autograd only. Dropout and BatchNorm behaviour is controlled by model.eval().
+
+Q: x.view(...) differs from x.reshape(...) in that view [M]
+- always copies the data
+* requires the tensor to be contiguous in memory and never copies, while reshape copies if necessary
+- changes the dtype
+- works only on GPU tensors
+> After operations such as transpose or permute the tensor is non-contiguous, and view raises an error unless .contiguous() is called first.
+
+Q: Calling loss.backward() twice on the same graph without retain_graph=True raises an error because [M]
+- gradients can be computed only once per tensor
+* the intermediate buffers of the graph are freed after the first backward pass
+- the optimizer is locked
+- the loss becomes zero
+> PyTorch frees saved activations to save memory; retain_graph keeps them when multiple backward passes are needed.
+
+Q: tensor.detach() returns [M]
+- a deep copy on the CPU
+* a tensor sharing the same data but cut off from the computation graph
+- the gradient of the tensor
+- a NumPy array
+> Detaching stops gradients from flowing through that value, as needed for targets, stop-gradient tricks or logging.
+
+Q: Which is the correct order of calls in one training step? [E]
+- backward, forward, step, zero_grad
+* zero_grad, forward and loss, backward, step
+- step, zero_grad, backward, forward
+- forward, step, backward, zero_grad
+> Clear old gradients, compute the loss, backpropagate, then update the parameters.
+
+Q: nn.CrossEntropyLoss expects as input [E]
+- probabilities after a softmax
+* raw logits; it applies log-softmax internally
+- one-hot predictions
+- log-probabilities only
+> Applying softmax before the loss is a common bug that weakens gradients. NLLLoss is the variant that expects log-probabilities.
+
+Q: In-place operations (such as x.relu_() or x += 1) can break autograd because [M]
+- they are slower
+* they may overwrite values that are needed to compute gradients in the backward pass
+- they change the tensor's device
+- they disable the optimizer
+> Autograd tracks tensor versions and raises an error if a saved tensor was modified in place.
+
+Q: Automatic mixed precision (torch.autocast with a GradScaler) [M]
+- trains entirely in float64
+* runs most operations in half precision for speed and memory, and scales the loss to avoid gradient underflow in fp16
+- quantizes weights to 8 bits
+- removes the need for an optimizer
+> Loss scaling keeps small gradients representable in float16; with bfloat16 the scaler is usually unnecessary.
+
+Q: Setting pin_memory=True and using multiple workers in a DataLoader helps because [M]
+- it increases the model's accuracy
+* data loading runs in parallel processes and page-locked memory speeds up host-to-GPU transfer
+- it shuffles the data better
+- it stores the dataset on the GPU
+> Input pipelines are a frequent bottleneck; parallel workers and pinned memory keep the GPU fed.
+
+Q: DistributedDataParallel (DDP) trains on multiple GPUs by [M]
+- splitting each layer across GPUs
+* running one process per GPU with a model replica, each on a different data shard, and averaging gradients every step
+- training independent models and averaging at the end
+- sending all data to one GPU and outputs to the others
+> Gradients are synchronized by all-reduce, so each step equals one large-batch step. A DistributedSampler gives each process a disjoint shard.
+
+Q: With DDP on 8 GPUs and a per-GPU batch size of 32, the effective batch size per optimizer step is [E]
+- 32
+- 64
+* 256
+- 8
+> Gradients from the 8 replicas are averaged, equivalent to one batch of 8 * 32 = 256 examples.
+
+Q: Gradient checkpointing (activation checkpointing) reduces memory by [H]
+- saving checkpoints to disk more often
+* not storing some intermediate activations and recomputing them during the backward pass
+- using smaller gradients
+- skipping the backward pass for some layers
+> It trades extra forward computation for lower activation memory, enabling deeper models or longer sequences.
+
+Q: A "CUDA out of memory" error during training is LEAST likely to be fixed by [M]
+- reducing the batch size
+- using mixed precision
+- gradient accumulation with smaller micro-batches
+* increasing the number of DataLoader workers
+> Workers affect CPU-side data loading, not GPU memory. The other options reduce activation or parameter memory.
+
+Q: Accumulating a running loss with total += loss instead of total += loss.item() causes [M]
+- incorrect gradients
+* a memory leak, because each loss tensor keeps its whole computation graph alive
+- faster training
+- the loss to be detached automatically
+> Summing graph-attached tensors retains every iteration's graph; .item() or .detach() extracts the value only.
+
+Q: torch.compile mainly speeds up models by [M]
+- changing the model's weights
+* tracing the Python code into an optimized graph, reducing interpreter overhead and enabling operator fusion
+- lowering numerical precision
+- increasing the batch size
+> It captures the computation with TorchDynamo and hands it to a compiler backend; the first call pays a compilation cost.
+
+Q: For reproducible results you should set random seeds, and additionally be aware that [M]
+- seeds make GPU results bit-identical across all hardware
+* some GPU operations are non-deterministic unless deterministic algorithms are enabled, usually at a speed cost
+- seeds only affect data loading
+- reproducibility is impossible in PyTorch
+> cuDNN algorithm selection and non-deterministic kernels cause run-to-run variation; torch.use_deterministic_algorithms enforces determinism where possible.
+
+Q: model.state_dict() contains [E]
+- the Python source code of the model
+* a mapping from parameter and buffer names to tensors
+- the optimizer's learning rate
+- the training dataset
+> To resume training exactly you also need the optimizer and scheduler states, the step counter and, with AMP, the scaler state.
+
+Q: A buffer registered with register_buffer (for example BatchNorm's running mean) [M]
+- is updated by the optimizer
+* is part of the module's state and moves with .to(device), but is not a parameter and gets no gradient updates
+- is not saved in the state dict
+- must be a scalar
+> Buffers hold non-trainable state such as running statistics, masks or positional tables.
+
+Q: In data-parallel training of very large models, parameters themselves are sharded across devices by [H]
+- DistributedDataParallel
+* FSDP-style sharding, in which each device holds a shard of parameters, gradients and optimizer state and gathers full parameters only when a layer is used
+- gradient clipping
+- DataLoader workers
+> Fully sharded data parallel (ZeRO stage 3) cuts per-GPU memory roughly in proportion to the number of devices, at the cost of communication.
+
+Q: The typical memory cost of Adam's optimizer state for a model with P parameters (same dtype) is [M]
+- zero
+- P
+* 2P, for the first and second moment estimates
+- P squared
+> Along with weights and gradients, training in fp32 with Adam needs roughly 4 copies of the parameters before counting activations.
+
+Q: When the GPU utilization is low and the training step time is dominated by waiting for data, the fix is to [E]
+- use a larger model
+* optimize the input pipeline: more workers, faster storage, caching or pre-processing ahead of time
+- lower the learning rate
+- disable mixed precision
+> Profiling tells you whether the bottleneck is data loading, host-to-device copies or the model itself.
+
+Q: Tensor parallelism and pipeline parallelism differ in that [H]
+- they are the same technique
+* tensor parallelism splits individual layers' matrices across devices, while pipeline parallelism places different layers on different devices
+- pipeline parallelism splits the batch
+- tensor parallelism replicates the model
+> Large-model training combines data, tensor and pipeline parallelism to fit and scale across many accelerators.
+
+Q: torch.nn.utils.clip_grad_norm_ should be called [E]
+- before loss.backward()
+* after loss.backward() and before optimizer.step()
+- after optimizer.step()
+- inside the forward pass
+> Gradients must exist to be clipped and must be clipped before they are applied. With AMP, unscale the gradients first.

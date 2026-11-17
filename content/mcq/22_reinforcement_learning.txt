@@ -1,0 +1,178 @@
+# topic: Reinforcement Learning
+# id: rl
+# subtopics: MDPs, returns and discounting; Value functions and Bellman equations; Q-learning and DQN; Policy gradients and REINFORCE; Actor-critic, GAE and PPO; Exploration vs exploitation and bandits; Off-policy vs on-policy learning; Offline RL and imitation learning
+
+Q: A Markov decision process is defined by [E]
+- states and rewards only
+* states, actions, transition probabilities, a reward function and a discount factor
+- a dataset of labeled examples
+- a policy and a value function only
+> The Markov property means the next state and reward depend only on the current state and action.
+
+Q: With discount factor gamma = 0.9 and a constant reward of 1 at every step forever, the return is [E]
+- 1
+- 9
+* 10
+- infinite
+> The geometric series sums to 1 / (1 - gamma) = 10.
+
+Q: The Bellman optimality equation for Q* is [M]
+- Q*(s, a) = r + gamma * mean over a' of Q*(s', a')
+* Q*(s, a) = E[r + gamma * max over a' of Q*(s', a')]
+- Q*(s, a) = max over s' of r
+- Q*(s, a) = V*(s) for every a
+> The optimal action value equals the expected immediate reward plus the discounted value of acting optimally afterwards.
+
+Q: Q-learning is called off-policy because [M]
+- it does not use a policy
+* its update target uses the greedy action in the next state, regardless of the action the behaviour policy actually takes
+- it learns from a fixed dataset only
+- it requires a model of the environment
+> The max in the target evaluates the greedy policy while data can come from an exploratory policy. SARSA, which uses the action actually taken, is on-policy.
+
+Q: Experience replay in DQN is used to [M]
+- increase the reward
+* break the correlation between consecutive samples and reuse past transitions
+- compute policy gradients
+- avoid using a neural network
+> Sampling random minibatches from a buffer makes the data closer to i.i.d. and improves sample efficiency.
+
+Q: The target network in DQN [M]
+- chooses actions during exploration
+* is a periodically updated copy of the Q-network used to compute stable bootstrap targets
+- stores the replay buffer
+- predicts the reward function
+> Without it the targets move with every update, which can cause oscillation or divergence.
+
+Q: Double DQN reduces which problem of standard DQN? [H]
+- Slow environment simulation
+* Over-estimation of Q-values caused by taking a max over noisy estimates
+- Sparse rewards
+- Catastrophic forgetting of the policy network's architecture
+> The online network selects the next action and the target network evaluates it, decoupling selection from evaluation.
+
+Q: The policy gradient theorem gives the gradient of expected return as [M]
+- the gradient of the reward function with respect to actions
+* E[grad log pi(a|s) * (return or advantage)]
+- the difference between two Q-values
+- the Hessian of the value function
+> The score-function estimator needs no gradient of the environment dynamics, only of the policy's log-probabilities.
+
+Q: Subtracting a baseline, such as a state-value estimate, from the return in REINFORCE [M]
+- introduces bias and reduces variance
+* reduces variance without introducing bias
+- increases variance
+- changes the optimal policy
+> Any baseline that does not depend on the action has zero expected gradient contribution, so the estimator stays unbiased while variance drops.
+
+Q: In an actor-critic method, the critic [E]
+- selects actions
+* estimates a value function used to evaluate the actor's actions
+- stores the environment model
+- sets the discount factor
+> The actor is the policy; the critic's value estimates give lower-variance learning signals (advantages) than Monte Carlo returns.
+
+Q: PPO's clipped surrogate objective is designed to [M]
+- maximize the entropy of the policy only
+* prevent excessively large policy updates by clipping the probability ratio between new and old policies
+- remove the need for a value function
+- make learning off-policy with a replay buffer
+> Clipping the ratio to [1 - eps, 1 + eps] keeps the new policy close to the data-collecting policy, approximating a trust region with first-order optimization.
+
+Q: Generalized advantage estimation (GAE) with parameter lambda trades off [H]
+- exploration and exploitation
+* bias and variance of the advantage estimate, between one-step TD (lambda = 0) and Monte Carlo (lambda = 1)
+- actor and critic learning rates
+- on-policy and off-policy data
+> GAE is an exponentially weighted sum of TD residuals: small lambda relies on the (biased) critic, large lambda on (noisy) returns.
+
+Q: Epsilon-greedy exploration means [E]
+- always taking a random action
+* taking a random action with probability epsilon and the greedy action otherwise
+- adding noise to the reward
+- decaying the learning rate
+> Epsilon is often annealed from high to low so the agent explores early and exploits later.
+
+Q: The Upper Confidence Bound (UCB) algorithm for bandits selects the arm with the highest [M]
+- observed mean reward
+* mean reward plus an uncertainty bonus that shrinks as the arm is pulled more often
+- number of pulls
+- most recent reward
+> "Optimism in the face of uncertainty" gives logarithmic regret by exploring arms whose values are still uncertain.
+
+Q: Thompson sampling chooses actions by [M]
+- always picking the arm with the highest posterior mean
+* sampling a value for each arm from its posterior and picking the arm with the highest sample
+- picking arms uniformly at random
+- maximizing an upper confidence bound
+> Probability matching explores in proportion to the chance each arm is optimal and is widely used in online experimentation.
+
+Q: Monte Carlo and temporal-difference value estimation differ in that TD [M]
+- must wait until the end of an episode
+* bootstraps from the current value estimate of the next state, allowing updates after every step
+- has higher variance and no bias
+- cannot be used with function approximation
+> TD targets r + gamma V(s') have lower variance but are biased by the current estimate; Monte Carlo returns are unbiased but high-variance.
+
+Q: The "deadly triad" that can make value learning diverge consists of [H]
+- exploration, exploitation and discounting
+* function approximation, bootstrapping and off-policy training
+- actor, critic and replay buffer
+- reward shaping, clipping and normalization
+> Each alone is fine, but together they can cause unbounded value estimates, motivating target networks and other stabilizers.
+
+Q: Offline (batch) RL is hard mainly because of [H]
+- slow simulators
+* distribution shift: the learned policy queries actions outside the dataset, where value estimates are unreliable
+- too much exploration
+- the lack of rewards
+> Bootstrapping from over-estimated out-of-distribution actions compounds errors; methods such as CQL and IQL keep the policy close to the data or penalize unseen actions.
+
+Q: Behaviour cloning suffers from compounding errors because [M]
+- the expert is suboptimal
+* small mistakes lead the agent to states not covered by expert demonstrations, where it errs more
+- it uses rewards incorrectly
+- it requires a model of the environment
+> Supervised imitation assumes i.i.d. states; DAgger addresses this by querying the expert on states visited by the learner.
+
+Q: Reward shaping with a potential-based function F = gamma * phi(s') - phi(s) [H]
+- can change the optimal policy arbitrarily
+* leaves the optimal policy unchanged while possibly speeding up learning
+- makes all rewards zero
+- applies only to bandits
+> Ng, Harada and Russell showed that potential-based shaping preserves optimal policies; other shaping can introduce unintended behaviour.
+
+Q: An entropy bonus in the policy objective (as in SAC or A3C) [M]
+- makes the policy deterministic
+* encourages exploration by discouraging premature collapse to a deterministic policy
+- increases the discount factor
+- replaces the critic
+> Maximum-entropy RL rewards randomness in addition to return, improving exploration and robustness.
+
+Q: Model-based RL differs from model-free RL in that it [E]
+- uses no neural networks
+* learns or uses a model of environment dynamics to plan or to generate simulated experience
+- cannot handle continuous actions
+- needs no reward
+> Planning with a model (as in MuZero or Dreamer) can be far more sample-efficient, at the risk of exploiting model errors.
+
+Q: In the contextual bandit setting, compared with full RL, [M]
+- there are no rewards
+* actions do not affect future states, so there is no long-term credit assignment
+- the action space is always continuous
+- the policy is fixed
+> Each round is an independent context-action-reward interaction, a good model for recommendations and ad selection.
+
+Q: Importance sampling is used in off-policy evaluation to [H]
+- increase exploration
+* reweight returns collected under a behaviour policy to estimate the value of a different target policy
+- reduce the size of the replay buffer
+- normalize observations
+> Weights are products of pi_target / pi_behaviour over the trajectory; they are unbiased but can have very high variance.
+
+Q: Sparse rewards make learning difficult mainly because [M]
+- the discount factor must be zero
+* the agent rarely observes any learning signal, so credit assignment and exploration are hard
+- gradients explode
+- the state space becomes continuous
+> Remedies include reward shaping, curiosity-driven exploration, hindsight experience replay and curricula.

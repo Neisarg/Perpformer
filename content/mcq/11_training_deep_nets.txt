@@ -1,0 +1,178 @@
+# topic: Training Deep Networks
+# id: training
+# subtopics: Batch, layer, group and RMS normalization; Dropout; Residual connections; Hyper-parameter tuning; Debugging training (loss curves, sanity checks); Class imbalance and focal loss; Transfer learning and fine-tuning; Distillation
+
+Q: Batch normalization normalizes each feature using [E]
+- statistics across all features of a single example
+* the mean and variance of that feature across the mini-batch
+- the global dataset statistics computed before training
+- the weights of the previous layer
+> During training BatchNorm standardizes each channel with batch statistics, then applies a learned scale and shift.
+
+Q: At inference time, a BatchNorm layer uses [E]
+- the statistics of the current test batch
+* running averages of mean and variance collected during training
+- zero mean and unit variance always
+- statistics recomputed for each example
+> In eval mode the stored running statistics are used, making predictions deterministic and independent of other examples in the batch.
+
+Q: Layer normalization is preferred to batch normalization in Transformers and RNNs mainly because [M]
+- it has more parameters
+* it normalizes across features within each example, so it does not depend on batch size or sequence length statistics
+- it is faster on GPUs
+- it removes the need for residual connections
+> LayerNorm behaves identically in training and inference and works with small batches and variable-length sequences.
+
+Q: With very small batch sizes (for example 2 per GPU in detection), BatchNorm performs poorly because [M]
+- the learned scale parameter diverges
+* batch statistics become noisy estimates; GroupNorm or synchronized BatchNorm are common fixes
+- the running mean cannot be stored
+- gradients cannot flow through it
+> Tiny batches give high-variance mean/variance estimates. GroupNorm computes statistics over channel groups within an example instead.
+
+Q: A common bug: a model with dropout and BatchNorm performs well in training but erratically at inference. The first thing to check is [E]
+- the learning rate schedule
+* whether model.eval() was called before inference
+- the optimizer's epsilon
+- the number of data loader workers
+> In train mode dropout stays active and BatchNorm uses batch statistics. eval() switches both to inference behaviour.
+
+Q: A useful first sanity check for a new training pipeline is to [E]
+- train on the full dataset for a week
+* verify that the model can overfit a single small batch to near-zero loss
+- start with the largest model available
+- disable the loss function
+> If the model cannot memorize a few examples, there is a bug in the model, loss, data or optimization setup.
+
+Q: For a 10-class classifier with randomly initialized weights and softmax cross-entropy, the expected initial loss is about [M]
+- 0
+- 1.0
+* 2.3
+- 10
+> With roughly uniform predictions the loss is -ln(1/10) = ln 10, about 2.30. A very different initial loss suggests an initialization or labelling bug.
+
+Q: Focal loss addresses class imbalance in dense detection by [M]
+- over-sampling the rare class
+* down-weighting the loss of well-classified (easy) examples with a factor (1 - p_t)^gamma
+- removing easy negatives from the dataset
+- increasing the learning rate for rare classes
+> The modulating factor shrinks the contribution of confident predictions so training focuses on hard examples.
+
+Q: When fine-tuning a pretrained network on a small dataset from a similar domain, a sensible strategy is to [M]
+- train all layers from scratch with a high learning rate
+* freeze most early layers (or use a small learning rate for them) and train the head
+- discard the pretrained weights of the early layers
+- remove all normalization layers
+> Early layers hold general features; with little data, updating everything aggressively overfits and destroys pretrained knowledge.
+
+Q: Knowledge distillation trains a student network to [M]
+- copy the teacher's weights
+* match the teacher's softened output distribution (usually with a temperature) in addition to the true labels
+- have the same architecture as the teacher
+- maximize the KL divergence from the teacher
+> Soft targets carry information about class similarities ("dark knowledge"); the distillation term is typically scaled by T^2.
+
+Q: The pre-activation or "pre-norm" Transformer block (normalization inside the residual branch, before the sub-layer) is preferred for deep models because [H]
+- it uses fewer parameters
+* the residual path stays an identity, giving more stable gradients and reducing the need for long warmup
+- it removes the need for attention
+- it makes the output scale invariant to depth
+> Post-norm places normalization on the main path, which hampers gradient flow in deep stacks; pre-norm trains more stably, usually with a final normalization layer.
+
+Q: Dropout applied before a BatchNorm layer can hurt because [H]
+- dropout has no effect before BatchNorm
+* dropout changes the variance of activations between training and inference, so BatchNorm's running statistics no longer match at test time
+- BatchNorm cancels the gradient of dropout
+- dropout makes the batch size smaller
+> This "variance shift" is why many architectures place dropout after normalization layers or avoid combining them.
+
+Q: Gradient accumulation over k mini-batches before an optimizer step is used to [M]
+- reduce the effective batch size
+* emulate a k-times larger batch when memory is limited
+- increase the learning rate automatically
+- skip the backward pass
+> Gradients are summed across k forward/backward passes and applied once, matching a larger batch (apart from BatchNorm statistics).
+
+Q: Random search is often preferred to grid search for hyper-parameter tuning because [M]
+- it is deterministic
+* only a few hyper-parameters matter, and random search explores more distinct values of each important one for the same budget
+- it guarantees the global optimum
+- it needs no validation set
+> A grid wastes trials on unimportant dimensions. Bergstra and Bengio showed that random sampling covers the important dimensions more efficiently.
+
+Q: Which hyper-parameter is generally the most important to tune first for a deep network? [E]
+- The random seed
+* The learning rate
+- The activation function
+- The number of data loader workers
+> The learning rate has the largest effect on whether and how fast training converges; tune it on a log scale.
+
+Q: Training loss decreases steadily while validation loss starts to rise after epoch 10. The right response is to [E]
+- keep training until training loss is zero
+* stop early or regularize more, since the model has started to overfit
+- increase model capacity
+- remove the validation set
+> Divergence between the curves marks the onset of overfitting; keep the checkpoint with the best validation score.
+
+Q: Weight tying between the input embedding and the output softmax layer in language models [M]
+- doubles the number of parameters
+* shares one matrix for both, reducing parameters and often improving perplexity
+- prevents the use of subword tokenization
+- is only possible for RNNs
+> Both matrices map between vocabulary and hidden space; sharing them regularizes and saves vocabulary-size times hidden-size parameters.
+
+Q: Stochastic depth regularizes very deep residual networks by [H]
+- dropping individual neurons
+* randomly skipping entire residual blocks during training
+- removing layers permanently after training
+- adding noise to the labels
+> Each residual branch is dropped with some probability (so the block acts as identity), training an implicit ensemble of shallower networks.
+
+Q: For class-imbalanced classification, which approach changes the loss rather than the data? [M]
+- Random over-sampling of the minority class
+- SMOTE
+* Class-weighted cross-entropy
+- Under-sampling the majority class
+> Class weights scale each example's loss by the inverse class frequency (or similar); the others modify the sampling of training data.
+
+Q: RMSNorm, used in several recent LLMs, differs from LayerNorm in that it [H]
+- normalizes over the batch dimension
+* rescales by the root mean square only, without subtracting the mean
+- has no learnable parameters at all
+- is applied only at inference
+> Dropping the re-centring step saves computation and works as well in practice; a learned gain is kept.
+
+Q: Which is a symptom of exploding gradients? [E]
+- The loss plateaus at a moderate value
+* The loss suddenly becomes NaN or inf and weight norms grow very large
+- Validation accuracy exceeds training accuracy
+- All gradients are exactly zero
+> Extremely large updates produce overflow. Remedies include gradient clipping, lower learning rates, normalization and better initialization.
+
+Q: Linear probing versus full fine-tuning of a pretrained model: linear probing [M]
+- updates all weights with a small learning rate
+* trains only a linear classifier on frozen features
+- retrains the backbone from scratch
+- removes the final layer entirely
+> Linear probing evaluates representation quality cheaply; full fine-tuning usually achieves higher in-distribution accuracy but can distort features.
+
+Q: Curriculum learning refers to [M]
+- training with the test set first
+* presenting examples in a meaningful order, typically from easy to hard
+- learning the learning rate
+- using the same batch every step
+> Starting with easier examples can speed convergence and improve final quality in some settings, mirroring how humans learn.
+
+Q: Label noise in the training set tends to hurt most when [H]
+- the model is small and heavily regularized
+* a high-capacity model is trained long enough to memorize the noisy labels
+- the noise is in the test set only
+- the learning rate is zero
+> Deep networks fit clean patterns first and memorize noise later; early stopping, robust losses and noise-aware methods mitigate the harm.
+
+Q: Self-supervised pretraining followed by supervised fine-tuning is useful mainly because [E]
+- labeled data are plentiful
+* it exploits large amounts of unlabeled data to learn representations that need fewer labels downstream
+- it avoids using gradient descent
+- it guarantees no overfitting
+> Pretext tasks (masked prediction, contrastive objectives) learn general features that transfer with relatively little labeled data.

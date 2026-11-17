@@ -1,0 +1,797 @@
+# topic: Generative Models & Reinforcement Learning
+# id: genrl
+# subtopics: VAE reparameterization and KL; Diffusion forward process and training loss; DDIM sampling and classifier-free guidance; GAN losses; Flow matching; Discounted returns and GAE; Q-learning; REINFORCE and PPO objectives
+
+=== vae-reparam-kl | VAE: Reparameterization and KL | Medium
+--- description
+Implement the two pieces of a VAE loss that involve the latent distribution `q(z|x) = Normal(mu, exp(logvar))`.
+
+`reparameterize(mu, logvar, eps)`: return `z = mu + sigma * eps` with `sigma = exp(0.5 * logvar)`. `eps` is standard normal noise with the same shape as `mu`, passed in so the function is deterministic.
+
+`kl_to_standard_normal(mu, logvar)`: return the KL divergence from `q` to `Normal(0, I)`, summed over the latent dimension (last dim) and averaged over the batch:
+
+```
+KL = -0.5 * sum(1 + logvar - mu^2 - exp(logvar))
+```
+
+Both inputs have shape `(B, D)`.
+--- starter
+import torch
+
+
+def reparameterize(mu: torch.Tensor, logvar: torch.Tensor, eps: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+
+
+def kl_to_standard_normal(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def reparameterize(mu: torch.Tensor, logvar: torch.Tensor, eps: torch.Tensor) -> torch.Tensor:
+    return mu + torch.exp(0.5 * logvar) * eps
+
+
+def kl_to_standard_normal(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    kl = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=-1)
+    return kl.mean()
+--- tests
+def test_reparameterize():
+    """z = mu + exp(logvar / 2) * eps"""
+    mu, logvar, eps = torch.tensor([[1.0, -1.0]]), torch.tensor([[0.0, math.log(4.0)]]), torch.tensor([[0.5, 0.5]])
+    check_close(reparameterize(mu, logvar, eps), [[1.5, 0.0]])
+
+def test_kl_zero_for_standard_normal():
+    """mu = 0, logvar = 0 gives KL = 0"""
+    check_close(kl_to_standard_normal(torch.zeros(4, 8), torch.zeros(4, 8)), 0.0)
+
+def test_kl_matches_distributions():
+    """Matches torch.distributions"""
+    mu, logvar = torch.randn(6, 5), torch.randn(6, 5) * 0.5
+    q = torch.distributions.Normal(mu, torch.exp(0.5 * logvar))
+    p = torch.distributions.Normal(torch.zeros(6, 5), torch.ones(6, 5))
+    expected = torch.distributions.kl_divergence(q, p).sum(-1).mean()
+    check_close(kl_to_standard_normal(mu, logvar), expected)
+
+def test_gradients_flow():
+    """Sampling is differentiable with respect to mu and logvar"""
+    mu = torch.zeros(3, 2, requires_grad=True)
+    logvar = torch.zeros(3, 2, requires_grad=True)
+    eps = torch.randn(3, 2)
+    reparameterize(mu, logvar, eps).sum().backward()
+    check_close(mu.grad, torch.ones(3, 2), name="d z / d mu")
+    check_close(logvar.grad, 0.5 * eps, name="d z / d logvar")
+
+def test_sample_statistics():
+    """Samples have the requested mean and standard deviation"""
+    mu, logvar = torch.full((20000, 1), 3.0), torch.full((20000, 1), math.log(0.25))
+    z = reparameterize(mu, logvar, torch.randn(20000, 1))
+    check_true(abs(z.mean().item() - 3.0) < 0.02, "sample mean is off")
+    check_true(abs(z.std().item() - 0.5) < 0.02, "sample std is off")
+--- hints
+- sigma = exp(0.5 * logvar).
+- Sum the KL over the latent dimension, then average over the batch.
+
+=== diffusion-forward | Diffusion Forward Process | Medium
+--- description
+Implement the DDPM noise schedule and the closed-form forward process.
+
+`make_alphas_cumprod(T, beta_start=1e-4, beta_end=0.02)`: with betas linearly spaced from `beta_start` to `beta_end` over `T` steps, return the cumulative product of `alpha_t = 1 - beta_t`, a tensor of shape `(T,)`.
+
+`q_sample(x0, t, alphas_cumprod, noise)`:
+
+- `x0`: `(B, ...)` clean data, `t`: `(B,)` integer timesteps, `noise`: same shape as `x0`
+- returns `sqrt(abar_t) * x0 + sqrt(1 - abar_t) * noise`, where `abar_t = alphas_cumprod[t]` is broadcast over the non-batch dimensions
+--- starter
+import torch
+
+
+def make_alphas_cumprod(T: int, beta_start: float = 1e-4, beta_end: float = 0.02) -> torch.Tensor:
+    # TODO
+    pass
+
+
+def q_sample(x0: torch.Tensor, t: torch.Tensor, alphas_cumprod: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def make_alphas_cumprod(T: int, beta_start: float = 1e-4, beta_end: float = 0.02) -> torch.Tensor:
+    betas = torch.linspace(beta_start, beta_end, T)
+    return torch.cumprod(1.0 - betas, dim=0)
+
+
+def q_sample(x0: torch.Tensor, t: torch.Tensor, alphas_cumprod: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+    abar = alphas_cumprod[t].view(-1, *([1] * (x0.dim() - 1)))
+    return abar.sqrt() * x0 + (1 - abar).sqrt() * noise
+--- tests
+def test_schedule():
+    """Cumulative product of 1 - beta for a linear schedule"""
+    ac = make_alphas_cumprod(4, 0.1, 0.4)
+    check_close(ac, [0.9, 0.9 * 0.8, 0.9 * 0.8 * 0.7, 0.9 * 0.8 * 0.7 * 0.6], tol=1e-5)
+    full = make_alphas_cumprod(1000)
+    check_shape(full, (1000,))
+    check_true(full[0] > 0.999 and full[-1] < 1e-3, "abar should go from about 1 to about 0")
+    check_true(bool((full[1:] < full[:-1]).all()), "abar must decrease monotonically")
+
+def test_q_sample_values():
+    """Per-example timesteps with image-shaped data"""
+    ac = torch.tensor([0.81, 0.25])
+    x0, noise = torch.ones(2, 1, 2, 2), torch.full((2, 1, 2, 2), 2.0)
+    out = q_sample(x0, torch.tensor([0, 1]), ac, noise)
+    check_close(out[0], torch.full((1, 2, 2), 0.9 + math.sqrt(0.19) * 2), name="t = 0")
+    check_close(out[1], torch.full((1, 2, 2), 0.5 + math.sqrt(0.75) * 2), name="t = 1")
+
+def test_vector_data():
+    """Works for (B, D) data"""
+    ac = make_alphas_cumprod(50)
+    x0, noise, t = torch.randn(5, 3), torch.randn(5, 3), torch.tensor([0, 10, 20, 30, 49])
+    expected = ac[t].sqrt().unsqueeze(1) * x0 + (1 - ac[t]).sqrt().unsqueeze(1) * noise
+    check_close(q_sample(x0, t, ac, noise), expected)
+
+def test_variance_preserving():
+    """Unit-variance data stays unit variance at every timestep"""
+    ac = make_alphas_cumprod(100)
+    x0, noise = torch.randn(4000, 8), torch.randn(4000, 8)
+    for step in (0, 50, 99):
+        xt = q_sample(x0, torch.full((4000,), step), ac, noise)
+        check_true(abs(xt.var().item() - 1.0) < 0.05, "variance at t=%d is %.3f" % (step, xt.var().item()))
+--- hints
+- Index the schedule with t, then reshape to (B, 1, 1, ...) so it broadcasts against x0.
+
+=== ddpm-loss | DDPM Training Loss | Medium
+--- description
+Implement the simple DDPM objective.
+
+`ddpm_loss(model, x0, t, alphas_cumprod, noise)`:
+
+1. form the noisy input `x_t = sqrt(abar_t) * x0 + sqrt(1 - abar_t) * noise` (with `abar_t = alphas_cumprod[t]` broadcast over non-batch dims)
+2. call `model(x_t, t)` to predict the noise
+3. return the mean squared error between the prediction and `noise`
+
+`x0` is `(B, ...)`, `t` is `(B,)` integers and `noise` has the shape of `x0`.
+--- starter
+import torch
+import torch.nn.functional as F
+
+
+def ddpm_loss(model, x0: torch.Tensor, t: torch.Tensor, alphas_cumprod: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn.functional as F
+
+
+def ddpm_loss(model, x0: torch.Tensor, t: torch.Tensor, alphas_cumprod: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+    abar = alphas_cumprod[t].view(-1, *([1] * (x0.dim() - 1)))
+    x_t = abar.sqrt() * x0 + (1 - abar).sqrt() * noise
+    return F.mse_loss(model(x_t, t), noise)
+--- tests
+AC = torch.tensor([0.9, 0.5, 0.1])
+
+def test_zero_model():
+    """A model that predicts 0 has loss mean(noise^2)"""
+    x0, noise = torch.randn(4, 3), torch.randn(4, 3)
+    loss = ddpm_loss(lambda x, t: torch.zeros_like(x), x0, torch.tensor([0, 1, 2, 1]), AC, noise)
+    check_close(loss, (noise ** 2).mean())
+
+def test_oracle_model():
+    """A model that recovers the noise exactly has zero loss"""
+    x0, noise = torch.randn(5, 2, 4, 4), torch.randn(5, 2, 4, 4)
+    t = torch.tensor([0, 2, 1, 1, 0])
+    def oracle(x_t, tt):
+        abar = AC[tt].view(-1, 1, 1, 1)
+        return (x_t - abar.sqrt() * x0) / (1 - abar).sqrt()
+    check_close(ddpm_loss(oracle, x0, t, AC, noise), 0.0, tol=1e-5)
+
+def test_model_receives_noisy_input_and_t():
+    """The model is called with x_t and the timesteps"""
+    x0, noise, t = torch.randn(3, 6), torch.randn(3, 6), torch.tensor([2, 0, 1])
+    seen = {}
+    def spy(x_t, tt):
+        seen["x"], seen["t"] = x_t.clone(), tt.clone()
+        return x_t
+    loss = ddpm_loss(spy, x0, t, AC, noise)
+    expected_xt = AC[t].sqrt().unsqueeze(1) * x0 + (1 - AC[t]).sqrt().unsqueeze(1) * noise
+    check_close(seen["x"], expected_xt, name="x_t passed to the model")
+    check_equal(seen["t"], t, name="t passed to the model")
+    check_close(loss, ((expected_xt - noise) ** 2).mean(), name="loss")
+
+def test_backward():
+    """Gradients reach the model parameters"""
+    net = torch.nn.Linear(4, 4)
+    loss = ddpm_loss(lambda x, t: net(x), torch.randn(8, 4), torch.randint(0, 3, (8,)), AC, torch.randn(8, 4))
+    loss.backward()
+    check_true(net.weight.grad is not None and net.weight.grad.abs().sum() > 0, "no gradient reached the model")
+--- hints
+- Gather abar with alphas_cumprod[t] and reshape it to (B, 1, ...).
+- Form x_t, call model(x_t, t) and compare with the noise using MSE.
+
+=== ddim-step | DDIM Sampling Step | Medium
+--- description
+Implement one deterministic DDIM update (eta = 0).
+
+`ddim_step(x_t, eps_pred, abar_t, abar_prev)` where `abar_t` and `abar_prev` are the cumulative alphas (floats or 0-dim tensors) at the current and the previous (less noisy) timestep:
+
+```
+x0_pred = (x_t - sqrt(1 - abar_t) * eps_pred) / sqrt(abar_t)
+x_prev  = sqrt(abar_prev) * x0_pred + sqrt(1 - abar_prev) * eps_pred
+```
+
+Return `(x_prev, x0_pred)`.
+--- starter
+import torch
+
+
+def ddim_step(x_t: torch.Tensor, eps_pred: torch.Tensor, abar_t, abar_prev):
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def ddim_step(x_t: torch.Tensor, eps_pred: torch.Tensor, abar_t, abar_prev):
+    abar_t = torch.as_tensor(abar_t, dtype=x_t.dtype)
+    abar_prev = torch.as_tensor(abar_prev, dtype=x_t.dtype)
+    x0_pred = (x_t - torch.sqrt(1 - abar_t) * eps_pred) / torch.sqrt(abar_t)
+    x_prev = torch.sqrt(abar_prev) * x0_pred + torch.sqrt(1 - abar_prev) * eps_pred
+    return x_prev, x0_pred
+--- tests
+def test_recovers_x0_with_true_noise():
+    """With the true noise, x0_pred is exact"""
+    x0, eps = torch.randn(3, 4), torch.randn(3, 4)
+    x_t = math.sqrt(0.3) * x0 + math.sqrt(0.7) * eps
+    _, x0_pred = ddim_step(x_t, eps, 0.3, 0.6)
+    check_close(x0_pred, x0, tol=1e-4, name="x0_pred")
+
+def test_consistent_with_forward_process():
+    """With the true noise, x_prev is the same sample at the earlier noise level"""
+    x0, eps = torch.randn(2, 1, 3, 3), torch.randn(2, 1, 3, 3)
+    x_t = math.sqrt(0.2) * x0 + math.sqrt(0.8) * eps
+    x_prev, _ = ddim_step(x_t, eps, 0.2, 0.7)
+    check_close(x_prev, math.sqrt(0.7) * x0 + math.sqrt(0.3) * eps, tol=1e-4, name="x_prev")
+
+def test_final_step():
+    """abar_prev = 1 returns the predicted clean sample"""
+    x_t, eps = torch.randn(5), torch.randn(5)
+    x_prev, x0_pred = ddim_step(x_t, eps, 0.5, 1.0)
+    check_close(x_prev, x0_pred, tol=1e-5)
+
+def test_tensor_alphas():
+    """Accepts 0-dim tensors for the alphas"""
+    x_t, eps = torch.randn(4), torch.randn(4)
+    a, b = ddim_step(x_t, eps, torch.tensor(0.4), torch.tensor(0.9))
+    c, d = ddim_step(x_t, eps, 0.4, 0.9)
+    check_close(a, c, tol=1e-5); check_close(b, d, tol=1e-5)
+--- hints
+- First invert the forward process to estimate x0 from x_t and the predicted noise.
+- Then re-noise that estimate to the previous noise level with the same predicted noise.
+
+=== classifier-free-guidance | Classifier-Free Guidance | Easy
+--- description
+Implement `guided_noise(model, x_t, t, cond, null_cond, scale)`.
+
+The model is called as `model(x, t, c)` and returns a noise prediction shaped like `x`. Classifier-free guidance combines a conditional and an unconditional prediction:
+
+```
+eps = eps_uncond + scale * (eps_cond - eps_uncond)
+```
+
+where `eps_cond = model(x_t, t, cond)` and `eps_uncond = model(x_t, t, null_cond)`.
+
+To save a forward pass, real implementations batch the two calls. Do the same: call the model exactly once on inputs of batch size `2B` (concatenate `x_t` with itself, `t` with itself and `cond` with `null_cond` along dim 0), then split the output.
+--- starter
+import torch
+
+
+def guided_noise(model, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor, null_cond: torch.Tensor, scale: float) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def guided_noise(model, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor, null_cond: torch.Tensor, scale: float) -> torch.Tensor:
+    x = torch.cat([x_t, x_t], dim=0)
+    tt = torch.cat([t, t], dim=0)
+    c = torch.cat([cond, null_cond], dim=0)
+    eps_cond, eps_uncond = model(x, tt, c).chunk(2, dim=0)
+    return eps_uncond + scale * (eps_cond - eps_uncond)
+--- tests
+def _model(calls):
+    def model(x, t, c):
+        calls.append(x.shape[0])
+        return x * 0.5 + c.sum(dim=1, keepdim=True) + t.float().unsqueeze(1)
+    return model
+
+def test_formula():
+    """Matches uncond + scale * (cond - uncond)"""
+    calls = []
+    model = _model(calls)
+    x, t = torch.randn(3, 4), torch.tensor([5, 1, 9])
+    cond, null = torch.randn(3, 2), torch.zeros(3, 2)
+    ec, eu = model(x, t, cond), model(x, t, null)
+    check_close(guided_noise(model, x, t, cond, null, 7.5), eu + 7.5 * (ec - eu), tol=1e-4)
+
+def test_single_batched_call():
+    """The model is called once with a doubled batch"""
+    calls = []
+    guided_noise(_model(calls), torch.randn(4, 4), torch.zeros(4, dtype=torch.long), torch.randn(4, 2), torch.zeros(4, 2), 3.0)
+    check_equal(calls, [8], name="batch sizes of the model calls")
+
+def test_scale_one_and_zero():
+    """scale = 1 is the conditional prediction; scale = 0 is the unconditional one"""
+    calls = []
+    model = _model(calls)
+    x, t, cond, null = torch.randn(2, 4), torch.tensor([1, 2]), torch.randn(2, 2), torch.zeros(2, 2)
+    check_close(guided_noise(model, x, t, cond, null, 1.0), model(x, t, cond), tol=1e-5, name="scale = 1")
+    check_close(guided_noise(model, x, t, cond, null, 0.0), model(x, t, null), tol=1e-5, name="scale = 0")
+--- hints
+- Concatenate along the batch dimension: [x, x], [t, t], [cond, null_cond].
+- chunk(2, dim=0) splits the output back into conditional and unconditional halves.
+
+=== gan-losses | GAN Losses | Easy
+--- description
+Implement the standard (non-saturating) GAN losses from discriminator logits.
+
+`discriminator_loss(real_logits, fake_logits)`: the discriminator should output 1 for real and 0 for fake samples. Return `BCE(real_logits, 1) + BCE(fake_logits, 0)`, each a mean over its batch.
+
+`generator_loss(fake_logits)`: the non-saturating generator loss, `BCE(fake_logits, 1)`: the generator wants its samples classified as real.
+
+Use the numerically stable `F.binary_cross_entropy_with_logits`.
+--- starter
+import torch
+import torch.nn.functional as F
+
+
+def discriminator_loss(real_logits: torch.Tensor, fake_logits: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+
+
+def generator_loss(fake_logits: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn.functional as F
+
+
+def discriminator_loss(real_logits: torch.Tensor, fake_logits: torch.Tensor) -> torch.Tensor:
+    real = F.binary_cross_entropy_with_logits(real_logits, torch.ones_like(real_logits))
+    fake = F.binary_cross_entropy_with_logits(fake_logits, torch.zeros_like(fake_logits))
+    return real + fake
+
+
+def generator_loss(fake_logits: torch.Tensor) -> torch.Tensor:
+    return F.binary_cross_entropy_with_logits(fake_logits, torch.ones_like(fake_logits))
+--- tests
+def test_chance_level():
+    """Zero logits give 2 ln 2 for D and ln 2 for G"""
+    z = torch.zeros(8, 1)
+    check_close(discriminator_loss(z, z), 2 * math.log(2.0))
+    check_close(generator_loss(z), math.log(2.0))
+
+def test_formulas():
+    """Matches -log(sigmoid) expressions; batches may differ in size"""
+    real, fake = torch.randn(6, 1), torch.randn(9, 1)
+    d_expected = -torch.log(torch.sigmoid(real)).mean() - torch.log(1 - torch.sigmoid(fake)).mean()
+    check_close(discriminator_loss(real, fake), d_expected, tol=1e-4)
+    check_close(generator_loss(fake), -torch.log(torch.sigmoid(fake)).mean(), tol=1e-4)
+
+def test_confident_discriminator():
+    """A perfect discriminator has near-zero loss and gives the generator a large loss"""
+    real, fake = torch.full((4,), 30.0), torch.full((4,), -30.0)
+    check_close(discriminator_loss(real, fake), 0.0, tol=1e-4)
+    check_close(generator_loss(fake), 30.0, tol=1e-3)
+
+def test_stable():
+    """Finite for extreme logits"""
+    out = discriminator_loss(torch.tensor([-500.0]), torch.tensor([500.0]))
+    check_true(torch.isfinite(out), "loss is not finite")
+    check_close(out, 1000.0, tol=1e-3)
+--- hints
+- Targets are ones_like / zeros_like of the logits.
+- The non-saturating generator loss labels fake samples as real.
+
+=== flow-matching-loss | Flow Matching Loss | Medium
+--- description
+Implement the conditional flow-matching (rectified flow) objective with straight-line paths.
+
+`flow_matching_loss(model, x0, x1, t)`:
+
+- `x0`: `(B, ...)` samples from the noise prior, `x1`: `(B, ...)` data samples, `t`: `(B,)` times in `[0, 1]`
+- interpolate `x_t = (1 - t) * x0 + t * x1` (with `t` broadcast over non-batch dims)
+- the target velocity is `x1 - x0`
+- return the mean squared error between `model(x_t, t)` and the target
+--- starter
+import torch
+import torch.nn.functional as F
+
+
+def flow_matching_loss(model, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn.functional as F
+
+
+def flow_matching_loss(model, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    tb = t.view(-1, *([1] * (x0.dim() - 1)))
+    x_t = (1 - tb) * x0 + tb * x1
+    return F.mse_loss(model(x_t, t), x1 - x0)
+--- tests
+def test_zero_model():
+    """A zero model has loss mean((x1 - x0)^2)"""
+    x0, x1, t = torch.randn(4, 3), torch.randn(4, 3), torch.rand(4)
+    check_close(flow_matching_loss(lambda x, tt: torch.zeros_like(x), x0, x1, t), ((x1 - x0) ** 2).mean())
+
+def test_interpolation_passed_to_model():
+    """The model sees the straight-line interpolation"""
+    x0, x1 = torch.zeros(3, 2, 2, 2), torch.ones(3, 2, 2, 2) * 4
+    t = torch.tensor([0.0, 0.25, 1.0])
+    seen = {}
+    def spy(x, tt):
+        seen["x"], seen["t"] = x.clone(), tt.clone()
+        return torch.zeros_like(x)
+    flow_matching_loss(spy, x0, x1, t)
+    check_close(seen["x"][:, 0, 0, 0], [0.0, 1.0, 4.0], name="x_t")
+    check_close(seen["t"], t, name="t passed to the model")
+
+def test_oracle_velocity():
+    """The constant velocity x1 - x0 has zero loss"""
+    x0, x1, t = torch.randn(5, 6), torch.randn(5, 6), torch.rand(5)
+    check_close(flow_matching_loss(lambda x, tt: x1 - x0, x0, x1, t), 0.0, tol=1e-6)
+
+def test_backward():
+    """Gradients reach the model"""
+    net = torch.nn.Linear(3, 3)
+    flow_matching_loss(lambda x, tt: net(x), torch.randn(8, 3), torch.randn(8, 3), torch.rand(8)).backward()
+    check_true(net.weight.grad is not None and net.weight.grad.abs().sum() > 0, "no gradient reached the model")
+--- hints
+- Reshape t to (B, 1, ...) before interpolating.
+- The regression target is the constant velocity x1 - x0.
+
+=== discounted-returns | Discounted Returns | Easy
+--- description
+Implement `discounted_returns(rewards, gamma, dones=None)`.
+
+- `rewards`: `(T,)` rewards of one rollout
+- `dones`: optional `(T,)` tensor of 0/1 (or bool) flags; `dones[t] = 1` means the episode ended at step `t`, so no reward from later steps flows back past it
+- returns a float tensor `G` of shape `(T,)` with
+
+```
+G[t] = rewards[t] + gamma * (1 - dones[t]) * G[t + 1]        (G[T] = 0)
+```
+--- starter
+import torch
+
+
+def discounted_returns(rewards: torch.Tensor, gamma: float, dones=None) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def discounted_returns(rewards: torch.Tensor, gamma: float, dones=None) -> torch.Tensor:
+    rewards = rewards.float()
+    T = rewards.shape[0]
+    out = torch.zeros(T)
+    running = 0.0
+    for t in reversed(range(T)):
+        not_done = 1.0 if dones is None else 1.0 - float(dones[t])
+        running = rewards[t].item() + gamma * not_done * running
+        out[t] = running
+    return out
+--- tests
+def test_basic():
+    """Three steps with gamma = 0.5"""
+    check_close(discounted_returns(torch.tensor([1.0, 2.0, 4.0]), 0.5), [3.0, 4.0, 4.0])
+
+def test_gamma_extremes():
+    """gamma = 0 returns the rewards; gamma = 1 returns reversed cumulative sums"""
+    r = torch.tensor([1.0, -2.0, 3.0, 0.5])
+    check_close(discounted_returns(r, 0.0), r)
+    check_close(discounted_returns(r, 1.0), [2.5, 1.5, 3.5, 0.5])
+
+def test_done_resets():
+    """Returns do not leak across episode boundaries"""
+    r = torch.tensor([1.0, 1.0, 1.0, 1.0])
+    dones = torch.tensor([0, 1, 0, 0])
+    check_close(discounted_returns(r, 0.9, dones), [1.9, 1.0, 1.9, 1.0])
+
+def test_bool_dones_and_single_step():
+    """Boolean flags work, and a single step returns its reward"""
+    check_close(discounted_returns(torch.tensor([2.0, 3.0]), 0.5, torch.tensor([True, False])), [2.0, 3.0])
+    check_close(discounted_returns(torch.tensor([7.0]), 0.99), [7.0])
+--- hints
+- Iterate backwards keeping a running return.
+- Multiply the carried return by (1 - done) so it resets at episode ends.
+
+=== gae | Generalized Advantage Estimation | Hard
+--- description
+Implement `gae(rewards, values, next_value, dones, gamma, lam)`.
+
+- `rewards`, `values`, `dones`: `(T,)` tensors for one rollout; `values[t] = V(s_t)`; `dones[t] = 1` if the episode ended at step `t`
+- `next_value`: `V(s_T)`, the value of the state after the last step (a float)
+
+```
+delta[t] = rewards[t] + gamma * V(s_{t+1}) * (1 - dones[t]) - values[t]
+adv[t]   = delta[t] + gamma * lam * (1 - dones[t]) * adv[t + 1]        (adv[T] = 0)
+```
+
+where `V(s_{t+1})` is `values[t + 1]`, or `next_value` for the last step. Return `(advantages, returns)` with `returns = advantages + values`, both float tensors of shape `(T,)`.
+--- starter
+import torch
+
+
+def gae(rewards, values, next_value, dones, gamma: float = 0.99, lam: float = 0.95):
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def gae(rewards, values, next_value, dones, gamma: float = 0.99, lam: float = 0.95):
+    T = rewards.shape[0]
+    values = values.float()
+    adv = torch.zeros(T)
+    last = 0.0
+    for t in reversed(range(T)):
+        not_done = 1.0 - float(dones[t])
+        v_next = float(next_value) if t == T - 1 else values[t + 1].item()
+        delta = rewards[t].item() + gamma * v_next * not_done - values[t].item()
+        last = delta + gamma * lam * not_done * last
+        adv[t] = last
+    return adv, adv + values
+--- tests
+R = torch.tensor([1.0, 0.0, 2.0])
+V = torch.tensor([0.5, 1.0, 0.2])
+ND = torch.zeros(3)
+
+def test_lambda_zero_is_td_error():
+    """lam = 0 gives one-step TD errors"""
+    adv, ret = gae(R, V, 0.4, ND, gamma=0.9, lam=0.0)
+    expected = [1.0 + 0.9 * 1.0 - 0.5, 0.0 + 0.9 * 0.2 - 1.0, 2.0 + 0.9 * 0.4 - 0.2]
+    check_close(adv, expected, name="advantages")
+    check_close(ret, torch.tensor(expected) + V, name="returns")
+
+def test_lambda_one_is_monte_carlo():
+    """lam = 1 gives discounted returns (bootstrapped at the end) minus values"""
+    adv, ret = gae(R, V, 0.4, ND, gamma=0.9, lam=1.0)
+    g2 = 2.0 + 0.9 * 0.4
+    g1 = 0.0 + 0.9 * g2
+    g0 = 1.0 + 0.9 * g1
+    check_close(ret, [g0, g1, g2], name="returns")
+    check_close(adv, torch.tensor([g0, g1, g2]) - V, name="advantages")
+
+def test_general_lambda():
+    """Recursive definition for intermediate lam"""
+    adv, _ = gae(R, V, 0.4, ND, gamma=0.9, lam=0.8)
+    d = [1.4, -0.82, 2.16]
+    a2 = d[2]
+    a1 = d[1] + 0.9 * 0.8 * a2
+    a0 = d[0] + 0.9 * 0.8 * a1
+    check_close(adv, [a0, a1, a2], name="advantages")
+
+def test_done_cuts_bootstrap():
+    """A terminal step neither bootstraps nor passes advantage backwards"""
+    dones = torch.tensor([0.0, 1.0, 0.0])
+    adv, _ = gae(R, V, 0.4, dones, gamma=0.9, lam=0.8)
+    a2 = 2.0 + 0.9 * 0.4 - 0.2
+    a1 = 0.0 - 1.0
+    a0 = (1.0 + 0.9 * 1.0 - 0.5) + 0.9 * 0.8 * a1
+    check_close(adv, [a0, a1, a2], name="advantages")
+
+def test_single_step_terminal():
+    """One terminal step: advantage is reward minus value"""
+    adv, ret = gae(torch.tensor([3.0]), torch.tensor([1.0]), 100.0, torch.tensor([1.0]), 0.99, 0.95)
+    check_close(adv, [2.0], name="advantages")
+    check_close(ret, [3.0], name="returns")
+--- hints
+- Iterate backwards, carrying the advantage of the following step.
+- Multiply both the bootstrap value and the carried advantage by (1 - done).
+
+=== ppo-clip-loss | PPO Clipped Objective | Medium
+--- description
+Implement the clipped surrogate loss of PPO.
+
+`ppo_clip_loss(logp_new, logp_old, advantages, clip_eps=0.2)`:
+
+```
+ratio = exp(logp_new - logp_old)
+surr1 = ratio * advantages
+surr2 = clamp(ratio, 1 - clip_eps, 1 + clip_eps) * advantages
+loss  = -mean(min(surr1, surr2))
+```
+
+All inputs have shape `(N,)`. `logp_old` and `advantages` are treated as constants: no gradient should flow into them.
+--- starter
+import torch
+
+
+def ppo_clip_loss(logp_new: torch.Tensor, logp_old: torch.Tensor, advantages: torch.Tensor, clip_eps: float = 0.2) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def ppo_clip_loss(logp_new: torch.Tensor, logp_old: torch.Tensor, advantages: torch.Tensor, clip_eps: float = 0.2) -> torch.Tensor:
+    advantages = advantages.detach()
+    ratio = torch.exp(logp_new - logp_old.detach())
+    surr1 = ratio * advantages
+    surr2 = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps) * advantages
+    return -torch.min(surr1, surr2).mean()
+--- tests
+def test_unchanged_policy():
+    """ratio = 1 gives minus the mean advantage"""
+    logp = torch.randn(10)
+    adv = torch.randn(10)
+    check_close(ppo_clip_loss(logp, logp.clone(), adv), -adv.mean())
+
+def test_hand_example():
+    """Clipping applies only when it lowers the objective"""
+    ratio = torch.tensor([1.5, 0.5, 1.5, 0.5])
+    adv = torch.tensor([1.0, 1.0, -1.0, -1.0])
+    loss = ppo_clip_loss(torch.log(ratio), torch.zeros(4), adv, 0.2)
+    check_close(loss, -(1.2 + 0.5 - 1.5 - 0.8) / 4)
+
+def test_gradient_zero_when_clipped():
+    """No incentive to push the ratio further once it is clipped in the favourable direction"""
+    logp_new = torch.log(torch.tensor([1.5, 1.1])).requires_grad_(True)
+    ppo_clip_loss(logp_new, torch.zeros(2), torch.tensor([1.0, 1.0]), 0.2).backward()
+    check_close(logp_new.grad, [0.0, -1.1 / 2], tol=1e-4, name="gradient")
+
+def test_no_gradient_to_constants():
+    """logp_old and advantages receive no gradient"""
+    logp_new = torch.randn(5, requires_grad=True)
+    logp_old = torch.randn(5, requires_grad=True)
+    adv = torch.randn(5, requires_grad=True)
+    ppo_clip_loss(logp_new, logp_old, adv).backward()
+    check_true(logp_old.grad is None or float(logp_old.grad.abs().sum()) == 0.0, "logp_old must be treated as a constant")
+    check_true(adv.grad is None or float(adv.grad.abs().sum()) == 0.0, "advantages must be treated as constants")
+--- hints
+- ratio = exp(logp_new - logp_old).
+- Take the element-wise minimum of the unclipped and clipped surrogates, then negate the mean; detach logp_old and the advantages.
+
+=== q-learning-update | Tabular Q-Learning Update | Easy
+--- description
+Implement one tabular Q-learning update.
+
+`q_learning_update(Q, s, a, r, s_next, done, alpha, gamma)`:
+
+- `Q`: `(num_states, num_actions)` float tensor, updated in place and returned
+- the TD target is `r` if `done` else `r + gamma * max_a' Q[s_next, a']`
+- `Q[s, a] += alpha * (target - Q[s, a])`
+
+Also implement `epsilon_greedy(Q, s, epsilon, u, random_action)`: return `random_action` if `u < epsilon`, otherwise the greedy action `argmax_a Q[s, a]` (an int). `u` is a uniform random number supplied by the caller.
+--- starter
+import torch
+
+
+def q_learning_update(Q: torch.Tensor, s: int, a: int, r: float, s_next: int, done: bool, alpha: float = 0.1, gamma: float = 0.99) -> torch.Tensor:
+    # TODO
+    pass
+
+
+def epsilon_greedy(Q: torch.Tensor, s: int, epsilon: float, u: float, random_action: int) -> int:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def q_learning_update(Q: torch.Tensor, s: int, a: int, r: float, s_next: int, done: bool, alpha: float = 0.1, gamma: float = 0.99) -> torch.Tensor:
+    target = r if done else r + gamma * Q[s_next].max().item()
+    Q[s, a] += alpha * (target - Q[s, a].item())
+    return Q
+
+
+def epsilon_greedy(Q: torch.Tensor, s: int, epsilon: float, u: float, random_action: int) -> int:
+    if u < epsilon:
+        return random_action
+    return int(Q[s].argmax().item())
+--- tests
+def test_update():
+    """Bootstraps from the best next action"""
+    Q = torch.tensor([[0.0, 1.0], [2.0, 5.0]])
+    out = q_learning_update(Q, 0, 1, 1.0, 1, False, alpha=0.5, gamma=0.9)
+    check_close(out, [[0.0, 1.0 + 0.5 * (1.0 + 0.9 * 5.0 - 1.0)], [2.0, 5.0]])
+    check_true(out is Q, "Q must be updated in place and returned")
+
+def test_terminal():
+    """No bootstrapping from a terminal transition"""
+    Q = torch.tensor([[0.0, 0.0], [10.0, 10.0]])
+    q_learning_update(Q, 0, 0, -1.0, 1, True, alpha=1.0, gamma=0.9)
+    check_close(Q, [[-1.0, 0.0], [10.0, 10.0]])
+
+def test_converges_on_chain():
+    """Learns optimal values on a two-state chain"""
+    Q = torch.zeros(2, 1)
+    for _ in range(300):
+        q_learning_update(Q, 0, 0, 0.0, 1, False, alpha=0.5, gamma=0.5)
+        q_learning_update(Q, 1, 0, 4.0, 1, True, alpha=0.5, gamma=0.5)
+    check_close(Q, [[2.0], [4.0]], tol=1e-3)
+
+def test_epsilon_greedy():
+    """Explores when u < epsilon, otherwise exploits"""
+    Q = torch.tensor([[0.1, 0.9, 0.3]])
+    check_equal(epsilon_greedy(Q, 0, 0.2, 0.5, 2), 1, name="greedy action")
+    check_equal(epsilon_greedy(Q, 0, 0.2, 0.1, 2), 2, name="random action")
+    check_equal(epsilon_greedy(Q, 0, 0.0, 0.0, 2), 1, name="epsilon = 0 never explores")
+--- hints
+- The target omits the bootstrap term when done is True.
+- Move Q[s, a] a fraction alpha of the way toward the target.
+
+=== reinforce-loss | REINFORCE Loss with Baseline | Medium
+--- description
+Implement the policy-gradient loss whose gradient is the REINFORCE estimator.
+
+`reinforce_loss(logits, actions, returns, baseline=None)`:
+
+- `logits`: `(N, A)` policy logits for the visited states
+- `actions`: `(N,)` actions taken, `returns`: `(N,)` returns
+- `baseline`: optional `(N,)` tensor (for example value estimates) subtracted from the returns
+
+```
+loss = -mean( log pi(a_i | s_i) * (returns_i - baseline_i) )
+```
+
+The weights `(returns - baseline)` are constants: no gradient flows through them.
+--- starter
+import torch
+import torch.nn.functional as F
+
+
+def reinforce_loss(logits: torch.Tensor, actions: torch.Tensor, returns: torch.Tensor, baseline=None) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import torch
+import torch.nn.functional as F
+
+
+def reinforce_loss(logits: torch.Tensor, actions: torch.Tensor, returns: torch.Tensor, baseline=None) -> torch.Tensor:
+    logp = F.log_softmax(logits, dim=-1).gather(1, actions.unsqueeze(1)).squeeze(1)
+    weights = returns if baseline is None else returns - baseline
+    return -(logp * weights.detach()).mean()
+--- tests
+def test_value():
+    """Matches the definition"""
+    logits, actions, returns = torch.randn(6, 3), torch.randint(0, 3, (6,)), torch.randn(6)
+    logp = torch.log_softmax(logits, -1)[torch.arange(6), actions]
+    check_close(reinforce_loss(logits, actions, returns), -(logp * returns).mean())
+
+def test_baseline():
+    """The baseline is subtracted from the returns"""
+    logits, actions = torch.randn(5, 4), torch.randint(0, 4, (5,))
+    returns, baseline = torch.randn(5), torch.randn(5)
+    logp = torch.log_softmax(logits, -1)[torch.arange(5), actions]
+    check_close(reinforce_loss(logits, actions, returns, baseline), -(logp * (returns - baseline)).mean())
+
+def test_gradient_direction():
+    """A positive return raises the probability of the taken action"""
+    logits = torch.zeros(1, 3, requires_grad=True)
+    reinforce_loss(logits, torch.tensor([2]), torch.tensor([1.0])).backward()
+    check_close(logits.grad, [[1 / 3, 1 / 3, -2 / 3]], name="gradient of the loss")
+
+def test_baseline_gets_no_gradient():
+    """No gradient flows into the baseline or the returns"""
+    logits = torch.randn(4, 2, requires_grad=True)
+    baseline = torch.randn(4, requires_grad=True)
+    reinforce_loss(logits, torch.tensor([0, 1, 1, 0]), torch.randn(4), baseline).backward()
+    check_true(baseline.grad is None or float(baseline.grad.abs().sum()) == 0.0, "the baseline must be treated as a constant")
+    check_true(logits.grad.abs().sum() > 0, "the logits received no gradient")
+--- hints
+- Select log pi(a|s) with log_softmax followed by gather.
+- Weight by (returns - baseline).detach() and negate the mean.
+

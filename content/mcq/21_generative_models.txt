@@ -1,0 +1,178 @@
+# topic: Generative Models
+# id: genmodels
+# subtopics: Autoencoders and VAEs (ELBO, reparameterization); GANs and their failure modes; Diffusion models (DDPM, DDIM, noise schedules); Classifier-free guidance; Latent diffusion; Flow matching and rectified flow; Normalizing flows and autoregressive models; Evaluation (FID, likelihood)
+
+Q: The VAE training objective, the ELBO, consists of [E]
+- an adversarial loss and a gradient penalty
+* a reconstruction term and a KL divergence between the approximate posterior and the prior
+- a contrastive loss and a weight decay term
+- a likelihood term only
+> ELBO = E_q[log p(x|z)] - KL(q(z|x) || p(z)), a lower bound on log p(x).
+
+Q: The reparameterization trick writes z = mu + sigma * eps with eps ~ N(0, I) so that [M]
+- sampling becomes deterministic at test time
+* gradients can flow through the sampling step to the encoder parameters
+- the KL term becomes zero
+- the decoder is not needed
+> Moving the randomness into a parameter-free noise variable makes z a differentiable function of mu and sigma.
+
+Q: "Posterior collapse" in VAEs refers to [H]
+- the decoder output diverging
+* the approximate posterior matching the prior so the decoder ignores the latent variable
+- the encoder producing infinite variance
+- the reconstruction loss reaching zero
+> With a powerful (for example autoregressive) decoder, the KL term can be minimized by making z uninformative. KL annealing and free bits are common remedies.
+
+Q: In a GAN, the generator is trained to [E]
+- maximize the likelihood of the data
+* produce samples that the discriminator classifies as real
+- reconstruct its input
+- minimize the discriminator's weights
+> The two networks play a minimax game; at the optimum of the original formulation the generator minimizes the Jensen-Shannon divergence to the data distribution.
+
+Q: Mode collapse in GANs means [M]
+- the discriminator's loss reaches zero
+* the generator produces only a small subset of the modes of the data distribution
+- training runs out of memory
+- the latent space becomes discrete
+> The generator can fool the discriminator with a few convincing outputs; remedies include minibatch discrimination, unrolled GANs and Wasserstein losses.
+
+Q: The Wasserstein GAN replaces the original loss mainly to [H]
+- speed up sampling
+* provide useful gradients even when real and generated distributions have little overlap
+- remove the need for a critic
+- generate discrete data
+> The earth-mover distance varies smoothly with the generator's parameters; it requires a Lipschitz critic, enforced by weight clipping or a gradient penalty.
+
+Q: In DDPM-style diffusion, the forward process [E]
+- removes noise step by step
+* gradually adds Gaussian noise to data over many steps according to a fixed schedule
+- is learned by a neural network
+- maps noise to data in one step
+> The forward (noising) process is fixed; the network learns the reverse process that denoises.
+
+Q: A convenient property of the Gaussian forward process is that x_t can be sampled directly from x_0 as [M]
+- x_t = x_0 + t
+* x_t = sqrt(alpha_bar_t) x_0 + sqrt(1 - alpha_bar_t) eps
+- x_t = alpha_t x_(t-1) only by iterating all steps
+- x_t = eps / x_0
+> Because Gaussians compose, any timestep can be reached in closed form, which makes training on random timesteps efficient.
+
+Q: The standard "simple" training loss for DDPM is [M]
+- binary cross-entropy between real and fake
+* mean squared error between the true noise and the network's predicted noise
+- KL divergence between the image and the prior
+- perceptual loss with a VGG network
+> The network eps_theta(x_t, t) regresses the noise that was added; this is a reweighted variational bound.
+
+Q: Classifier-free guidance generates samples using [M]
+- a separately trained classifier's gradient
+* eps = eps_uncond + w * (eps_cond - eps_uncond), from a model trained with the condition randomly dropped
+- two different diffusion models with different schedules
+- rejection sampling
+> One network learns conditional and unconditional predictions; extrapolating toward the conditional one trades diversity for fidelity and prompt adherence.
+
+Q: Latent diffusion models such as Stable Diffusion run the diffusion process [M]
+- directly on pixels at full resolution
+* in the compressed latent space of a pretrained autoencoder
+- on text tokens
+- in the frequency domain of the image only
+> Diffusing in a lower-dimensional latent (for example 8x down-sampled) cuts computation greatly; the decoder maps latents back to pixels.
+
+Q: DDIM sampling differs from DDPM ancestral sampling in that it [H]
+- requires retraining the model
+* uses a deterministic (or less stochastic) non-Markovian update that allows far fewer steps with the same trained network
+- adds more noise at every step
+- works only for audio
+> DDIM defines a family of processes sharing the same training objective; the deterministic variant corresponds to solving the probability-flow ODE.
+
+Q: Flow matching trains a network to [H]
+- classify noise levels
+* regress a velocity field that transports samples from a simple prior to the data along prescribed probability paths
+- maximize a variational bound with a discriminator
+- predict the next token
+> With straight-line (rectified flow) paths x_t = (1 - t) x_0 + t x_1 the target velocity is x_1 - x_0; sampling integrates an ODE and needs few steps.
+
+Q: Normalizing flows compute exact likelihoods because [M]
+- they use a discriminator
+* they are invertible mappings with tractable Jacobian determinants, so the change-of-variables formula applies
+- they discretize the data
+- they ignore the latent space
+> log p(x) = log p(z) + log |det dz/dx|. Architectures such as coupling layers make the determinant cheap.
+
+Q: Autoregressive generative models factorize the joint distribution as [E]
+- a product of independent marginals
+* a product of conditionals, each variable given the previous ones
+- a sum of Gaussians
+- a single softmax over all possible outputs
+> p(x) = prod_i p(x_i | x_<i) by the chain rule; this gives exact likelihoods but sequential sampling.
+
+Q: Fréchet Inception Distance (FID) compares generated and real images by [M]
+- pixel-wise mean squared error
+* the distance between Gaussians fitted to their Inception-network feature distributions
+- the discriminator's accuracy
+- counting distinct images
+> Lower FID is better; it captures both quality and diversity but depends on sample size and the feature extractor.
+
+Q: Compared with GANs, diffusion models generally offer [M]
+- faster sampling
+* more stable training and better mode coverage, at the cost of slower iterative sampling
+- no need for a neural network
+- exact likelihoods for free in all cases
+> Diffusion optimizes a simple regression loss without adversarial dynamics; distillation and consistency models reduce the number of sampling steps.
+
+Q: The beta-VAE increases the weight on the KL term in order to [M]
+- improve reconstruction sharpness
+* encourage more disentangled latent factors, at some cost in reconstruction quality
+- remove the prior
+- speed up training
+> A larger beta pressures the posterior toward the factorized prior, favouring independent latent dimensions.
+
+Q: VQ-VAE differs from a standard VAE in that [M]
+- it has no decoder
+* its latent space is discrete: encoder outputs are snapped to the nearest vector in a learned codebook
+- it uses a Gaussian mixture decoder
+- it cannot be combined with autoregressive priors
+> Quantization uses a straight-through gradient; a prior over code indices (autoregressive or diffusion) is trained afterwards. This underlies many image and audio tokenizers.
+
+Q: Predicting "v" (velocity) or x_0 instead of noise in diffusion training is mainly a choice of [H]
+- network architecture
+* parameterization, which changes the loss weighting across noise levels and can improve stability
+- dataset
+- optimizer
+> The three targets are linear functions of each other given x_t; they differ in how errors at high and low noise are weighted.
+
+Q: Consistency models aim to [H]
+- remove the need for training data
+* map any point on a diffusion trajectory directly to its clean endpoint, enabling one- or few-step generation
+- increase the number of sampling steps
+- learn a discriminator for diffusion
+> They are trained (by distillation or from scratch) so that outputs agree along a trajectory, collapsing the iterative solver.
+
+Q: In score-based generative modeling, the "score" is [H]
+- the classifier's confidence
+* the gradient of the log data density with respect to the data
+- the FID of the model
+- the discriminator's output
+> Denoising score matching learns grad_x log p_t(x); predicting the noise in DDPM is equivalent up to scaling.
+
+Q: The generator of a conditional GAN or a diffusion model is conditioned on a class label most simply by [E]
+- changing the optimizer
+* feeding a learned embedding of the label into the network together with the noise or timestep
+- training one model per pixel
+- removing normalization
+> Label embeddings are added or concatenated, or modulate normalization layers; guidance then strengthens the conditioning.
+
+Q: Diffusion Transformers (DiT) replace the U-Net backbone with [M]
+- an LSTM
+* a Transformer operating on patches of the (latent) image
+- a decision tree
+- a normalizing flow
+> Patchified latents are processed as tokens with timestep and condition injected through adaptive normalization; scaling the Transformer improves sample quality.
+
+Q: The cosine noise schedule was proposed for diffusion because the original linear schedule [H]
+- was too slow to compute
+* destroys information too quickly, leaving many late timesteps as nearly pure noise, especially at low resolution
+- added no noise
+- required labels
+> A cosine alpha_bar decays more gradually in the middle of the process, making more timesteps informative.

@@ -1,0 +1,178 @@
+# topic: ML System Design & MLOps
+# id: mlsys
+# subtopics: Framing a problem and choosing metrics; Data pipelines and feature stores; Training-serving skew; Batch vs online inference; Deployment (shadow, canary, A/B); Monitoring and drift; Latency, throughput and cost; LLM application design (RAG, caching, guardrails, routing); Retraining and data flywheels
+
+Q: The first step in an ML system design interview answer should usually be [E]
+- choosing the model architecture
+* clarifying the business goal, requirements and constraints, and defining success metrics
+- writing the training loop
+- selecting the GPU type
+> Scope, scale, latency budget and the objective determine every later choice; candidates who jump to models miss the framing.
+
+Q: Training-serving skew is [E]
+- the difference between training and validation loss
+* a mismatch between the data or feature computation used in training and what the model sees in production
+- GPU memory fragmentation
+- class imbalance
+> It often comes from duplicated feature logic, time-travel leakage or different preprocessing; shared feature code and logged serving features prevent it.
+
+Q: A feature store primarily provides [M]
+- a place to store model weights
+* consistent feature definitions for training and serving, with point-in-time correct historical values and low-latency online lookup
+- a GPU scheduler
+- a labeling tool
+> It reuses features across teams, prevents leakage through point-in-time joins and keeps offline and online values consistent.
+
+Q: A "point-in-time correct" join when building training data ensures that [M]
+- rows are sorted by time
+* each training example only uses feature values that were available at the time of the prediction event
+- all features come from the same table
+- the latest feature value is always used
+> Joining with the latest values leaks future information into training and inflates offline metrics.
+
+Q: Batch (offline) inference is preferable to online inference when [E]
+- predictions depend on the user's current request context
+* predictions can be precomputed on a schedule and freshness requirements are loose
+- latency must be under 50 ms for unseen inputs
+- the input space is unbounded and unpredictable
+> Precomputing and storing predictions is cheap and simple, but cannot react to real-time context or unseen entities.
+
+Q: A canary deployment [M]
+- replaces the old model for all traffic at once
+* routes a small share of live traffic to the new model and expands gradually if metrics stay healthy
+- runs the new model only offline
+- deploys only to internal employees forever
+> Limiting the blast radius lets problems be detected and rolled back before most users are affected.
+
+Q: Shadow deployment means [M]
+- the model is deployed only at night
+* the new model receives a copy of production traffic and its predictions are logged but not shown to users
+- two models alternate answering requests
+- the model runs on users' devices
+> Shadowing validates latency, stability and prediction distributions with real inputs and zero user risk, though it cannot measure user response.
+
+Q: Data drift (covariate shift) is typically monitored by [M]
+- re-reading the training code
+* comparing the distribution of incoming features with a reference window, using statistics such as PSI or KL divergence
+- counting the number of servers
+- measuring GPU utilization
+> Because labels are often delayed, input and prediction distribution monitoring gives early warning before accuracy can be measured.
+
+Q: When ground-truth labels arrive weeks after prediction, model quality in production is best tracked in the meantime by [M]
+- assuming the offline test accuracy still holds
+* proxy signals: input and prediction distribution drift, calibration on delayed slices and user behaviour metrics
+- retraining every hour regardless
+- turning off monitoring
+> Leading indicators flag problems early; the true metric is back-filled when labels arrive.
+
+Q: p99 latency is tracked in addition to mean latency because [E]
+- it is always lower than the mean
+* tail latency determines the experience of the slowest requests and is hidden by averages
+- it measures throughput
+- it is required for training
+> At scale a small fraction of slow requests affects many users, and fan-out to several services multiplies the chance of hitting the tail.
+
+Q: Which is NOT a standard technique for reducing online inference latency of a neural model? [M]
+- Quantization and distillation
+- Caching frequent results
+- Request batching on the GPU with a short queueing window
+* Increasing the number of training epochs
+> Training longer does not change the forward-pass cost. Smaller or compressed models, caching, batching and better hardware utilization do.
+
+Q: Dynamic batching on a GPU inference server increases throughput at the cost of [M]
+- lower accuracy
+* added queueing delay while the server waits to fill a batch
+- more model parameters
+- lost requests
+> A maximum batch size and a short timeout balance throughput against per-request latency.
+
+Q: For a semantic cache in front of an LLM, the main risk is [H]
+- higher token costs
+* returning a cached answer for a query that is similar in embedding space but differs in a detail that changes the correct answer
+- slower embedding lookups than generation
+- cache keys being too long
+> Similarity thresholds, scoping by user and context, and excluding personalized or time-sensitive queries limit wrong hits.
+
+Q: A model router or cascade for LLM applications reduces cost by [M]
+- always using the largest model
+* sending easy requests to a small, cheap model and escalating only hard or low-confidence ones to a larger model
+- duplicating every request
+- disabling caching
+> Most traffic is simple; routing by predicted difficulty or confidence keeps quality while cutting average cost and latency.
+
+Q: Guardrails in an LLM application are [M]
+- limits on GPU temperature
+* input and output checks (policy filters, schema validation, grounding checks) that run outside the main model call
+- parts of the tokenizer
+- hyper-parameters of the optimizer
+> Deterministic or model-based checks catch unsafe inputs, malformed outputs and ungrounded claims before they reach users or downstream systems.
+
+Q: Which design best serves a low-latency personalized feed for 100 million users and 10 million items? [H]
+- Score all items for each request with a large cross-attention model
+* Retrieve a few hundred candidates with ANN search over precomputed embeddings, then rank them with a heavier model
+- Precompute a single global top-10 list
+- Train one model per user
+> Brute-force scoring is infeasible; a funnel of cheap retrieval and expensive ranking meets both the latency and quality requirements.
+
+Q: Model retraining cadence should mainly be determined by [M]
+- the calendar quarter
+* how fast the data distribution changes and how quickly performance degrades, balanced against retraining cost and risk
+- the number of engineers on the team
+- the size of the model checkpoint
+> Fast-moving domains (ads, news) may retrain continuously; stable ones can retrain rarely. Triggered retraining on drift is a common compromise.
+
+Q: Reproducibility of an ML experiment requires versioning [E]
+- only the model weights
+* code, data, configuration, random seeds and environment
+- only the final metrics
+- only the Docker image name
+> Any of these can change the result; experiment trackers and data versioning tools record them together.
+
+Q: A data flywheel in an ML product refers to [M]
+- storing data on spinning disks
+* a loop in which product usage generates data (feedback, corrections) that improves the model, which improves the product
+- shuffling data each epoch
+- compressing logs
+> Designing the product to capture high-quality feedback is often more valuable than model changes.
+
+Q: Idempotent, re-runnable pipeline steps and backfills matter in ML data pipelines because [M]
+- they make models larger
+* failures and late data are routine, and steps must be safely repeatable without duplicating or corrupting data
+- they remove the need for monitoring
+- they speed up GPUs
+> Deterministic outputs keyed by partition let a failed or corrected day be recomputed without side effects.
+
+Q: An A/B test shows the new model improves the target metric but worsens a guardrail metric (for example latency or unsubscribe rate) beyond its threshold. The right decision is usually to [M]
+- ship immediately
+* not ship as is; investigate and fix the regression, since guardrail metrics protect long-term health
+- remove the guardrail metric
+- rerun until the guardrail passes
+> Guardrails encode constraints that the optimization target does not capture; violating them is a launch blocker by design.
+
+Q: Which storage and serving choice fits features that must be read in single-digit milliseconds at request time? [M]
+- A data warehouse scanned by SQL per request
+* A key-value online store populated from batch and streaming pipelines
+- CSV files on object storage
+- A notebook
+> Warehouses are for analytical scans; online stores (key-value, in-memory) provide point lookups with low tail latency.
+
+Q: Streaming features (for example "clicks in the last 5 minutes") are harder than batch features mainly because [H]
+- they use more disk
+* they require low-latency aggregation with correct handling of event time, late data and consistency with offline computation
+- they cannot be used in models
+- they are always less predictive
+> Keeping the online windowed aggregates identical to their offline backfilled equivalents is a classic source of skew.
+
+Q: For an LLM-powered support assistant, which evaluation setup is most informative before launch? [M]
+- Training loss of the base model
+* A golden set of real tickets with rubric-based grading, plus retrieval metrics and adversarial test cases
+- The number of documents indexed
+- Tokens per second
+> Task-specific evals with representative inputs and clear criteria predict production behaviour; they also become the regression suite.
+
+Q: Compared with fine-tuning, starting an LLM product with prompting and retrieval is usually recommended because [M]
+- fine-tuning is impossible
+* it is faster to iterate, needs no training data, and keeps knowledge updatable; fine-tuning is added when evals show a gap it can close
+- prompting always gives higher quality
+- retrieval removes the need for evaluation
+> Fine-tuning helps with style, format, latency or specialized behaviour but adds data, training and maintenance costs.

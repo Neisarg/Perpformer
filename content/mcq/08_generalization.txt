@@ -1,0 +1,178 @@
+# topic: Generalization & Regularization
+# id: general
+# subtopics: Bias-variance trade-off; Overfitting and underfitting; Cross-validation and data splits; Data leakage; L1/L2, dropout and early stopping; Data augmentation and label smoothing; Double descent and capacity; Feature engineering and selection
+
+Q: A model has 99% training accuracy and 72% validation accuracy. This is most indicative of [E]
+- high bias
+* high variance (overfitting)
+- label noise only in the training set
+- an under-parameterized model
+> A large gap between training and validation performance means the model fits training-set idiosyncrasies that do not generalize.
+
+Q: Which action is most likely to reduce overfitting? [E]
+- Training for more epochs
+- Adding more layers
+* Collecting more training data or adding regularization
+- Removing dropout
+> More data and regularization (weight decay, dropout, augmentation, early stopping) reduce variance. More capacity or longer training usually increases it.
+
+Q: The expected squared error of a regression estimator decomposes into [E]
+- bias + variance
+* bias squared + variance + irreducible noise
+- bias times variance
+- training error + test error
+> E[(y - f_hat)^2] = Bias^2 + Variance + sigma^2. The noise term cannot be reduced by any model.
+
+Q: In k-fold cross-validation, each data point is used for validation [E]
+- never
+* exactly once
+- k times
+- k - 1 times
+> The data are split into k folds; each fold serves once as the validation set while the other k - 1 folds are used for training.
+
+Q: You standardize features using the mean and standard deviation of the whole dataset, then split into train and test. This is [M]
+- the recommended practice
+* data leakage, because test-set statistics influence training
+- harmless for all models
+- required for cross-validation
+> Preprocessing must be fit on the training split only (inside each CV fold) and then applied to validation and test data.
+
+Q: For time-series forecasting, the validation split should be [M]
+- a random sample of rows
+* later in time than the training data (for example rolling-origin evaluation)
+- stratified by target value only
+- identical to the training set
+> Random splits let the model see the future. Temporal splits respect causality and match deployment conditions.
+
+Q: Early stopping acts as a regularizer because [M]
+- it increases the learning rate
+* it limits how far the weights can move from their initialization, similar in effect to weight decay
+- it adds noise to the gradients
+- it removes parameters from the model
+> Stopping when validation error stops improving restricts the effective capacity; for linear models it is closely related to L2 regularization.
+
+Q: You have a small dataset where each patient contributes several samples. The correct way to cross-validate is [M]
+- random k-fold over samples
+* group k-fold, keeping all samples of a patient in the same fold
+- leave-one-sample-out
+- no validation is needed
+> Samples from the same patient are correlated; splitting them across folds leaks information and overestimates performance.
+
+Q: Label smoothing replaces one-hot targets with [M]
+- random labels
+* a mixture of the one-hot target and a uniform distribution over classes
+- the model's own predictions
+- the nearest neighbour's label
+> With smoothing epsilon the target is (1 - eps) for the true class plus eps / K spread over all classes, discouraging over-confident logits and improving calibration.
+
+Q: The "double descent" phenomenon refers to [H]
+- training loss decreasing twice per epoch
+* test error decreasing, rising near the interpolation threshold, then decreasing again as model capacity keeps growing
+- validation loss being lower than training loss
+- two learning-rate decays in a schedule
+> Beyond the point where the model can just fit the training data, larger over-parameterized models often generalize better again, contradicting the classical U-shaped curve.
+
+Q: Nested cross-validation is used to [M]
+- speed up hyper-parameter search
+* obtain an unbiased performance estimate when hyper-parameters are also tuned by cross-validation
+- train on the test set safely
+- increase the amount of training data
+> The inner loop selects hyper-parameters; the outer loop evaluates the whole selection procedure on data it never saw.
+
+Q: Which is an example of target leakage? [M]
+- Using age to predict income
+* Using "number of collection calls made" to predict whether a loan will default
+- Normalizing features with training statistics
+- Using a held-out test set
+> A feature that is a consequence of the outcome, or unavailable at prediction time, leaks the label and inflates offline metrics.
+
+Q: Dropout with keep probability p at training time, in the "inverted dropout" formulation, [M]
+- multiplies activations by p at test time
+* divides the kept activations by p during training so no change is needed at test time
+- removes the same units for every example in the dataset
+- is applied only to the output layer
+> Scaling by 1/p during training keeps the expected activation unchanged, so inference uses the full network without rescaling.
+
+Q: Mixup regularizes a classifier by training on [M]
+- images with random patches erased
+* convex combinations of pairs of inputs and of their labels
+- adversarial examples
+- unlabeled data with pseudo-labels
+> x = lam x_i + (1 - lam) x_j and y = lam y_i + (1 - lam) y_j, encouraging linear behaviour between examples and improving calibration and robustness.
+
+Q: Stratified sampling when splitting a classification dataset ensures that [E]
+- each split has the same number of features
+* each split has approximately the same class proportions as the whole dataset
+- no duplicates exist
+- the test set is larger than the training set
+> Stratification is important for imbalanced classes so that rare classes appear in every split.
+
+Q: Which statement about the test set is correct? [E]
+- It should be used to choose hyper-parameters
+- It should be used for early stopping
+* It should be used only for the final estimate of generalization performance
+- It can be merged into training without consequences for evaluation
+> Repeatedly consulting the test set during model selection overfits to it; a separate validation set is for tuning.
+
+Q: Training on data from one distribution and deploying on a different input distribution, with p(y|x) unchanged, is called [M]
+- label shift
+* covariate shift
+- concept drift
+- class imbalance
+> Covariate shift: p(x) changes, p(y|x) stays. Label shift: p(y) changes with p(x|y) fixed. Concept drift: p(y|x) itself changes.
+
+Q: A learning curve shows both training and validation error high and close together even with more data. Adding more data will [M]
+- significantly lower validation error
+* help little; the model is underfitting
+- cause overfitting
+- lower the training error
+> When the curves have converged at a high error, the limitation is bias; use a more flexible model or better features.
+
+Q: Weight decay in a deep network trained with SGD is equivalent to [E]
+- dropout
+* L2 regularization on the weights
+- L1 regularization on the activations
+- batch normalization
+> For plain SGD, adding (lambda/2)||w||^2 to the loss gives the same update as decaying weights by lr * lambda each step (not so for Adam).
+
+Q: Why might validation loss be lower than training loss during training? [M]
+- The model is definitely leaking labels
+* Regularization such as dropout or augmentation is active only during training, and training loss is averaged over an epoch while the model improves
+- Validation sets are always easier
+- The optimizer is diverging
+> Dropout and augmentation make the training task harder, and the training loss is a running average over earlier, worse weights.
+
+Q: The VC dimension of a hypothesis class measures [H]
+- the number of parameters
+* the largest number of points the class can shatter (label in all possible ways)
+- the training error
+- the depth of the model
+> Capacity in statistical learning theory: generalization bounds grow with the VC dimension relative to sample size. It is not always equal to the parameter count.
+
+Q: Filter, wrapper and embedded methods are three families of [M]
+- data augmentation
+* feature selection
+- ensembling
+- hyper-parameter search
+> Filters score features independently of the model (mutual information), wrappers search subsets using model performance (RFE), embedded methods select during training (lasso).
+
+Q: Target (mean) encoding of a high-cardinality categorical feature should be computed [M]
+- on the full dataset including the test set
+* out-of-fold or with smoothing, to avoid leaking each row's own label
+- only for numeric features
+- after training the model
+> Encoding a row with a statistic that includes its own target leaks the label; out-of-fold estimates and smoothing toward the global mean prevent this.
+
+Q: Which technique typically improves robustness and accuracy of image models without collecting new data? [E]
+- Removing the validation set
+* Data augmentation such as random crops and flips
+- Training with a batch size of 1
+- Disabling shuffling
+> Label-preserving transformations expand the effective training distribution and encode invariances.
+
+Q: The lottery ticket hypothesis states that [H]
+- all initializations are equally good
+* dense randomly initialized networks contain sparse subnetworks that, trained in isolation from the same initialization, can match the full network's accuracy
+- pruning always reduces accuracy
+- networks should be trained with random labels first
+> Frankle and Carbin found such "winning tickets" by iterative magnitude pruning and rewinding weights to their initial values.

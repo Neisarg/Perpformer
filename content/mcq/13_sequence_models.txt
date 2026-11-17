@@ -1,0 +1,178 @@
+# topic: Sequence Models & Attention
+# id: seq
+# subtopics: RNNs and backpropagation through time; LSTM and GRU gating; Seq2seq and teacher forcing; Attention mechanisms; Scaled dot-product and multi-head attention; Positional information; CTC and speech
+
+Q: Vanilla RNNs struggle to learn long-range dependencies mainly because of [E]
+- too many parameters
+* vanishing and exploding gradients when backpropagating through many time steps
+- the lack of non-linearities
+- their inability to process variable-length input
+> Gradients are multiplied by the recurrent Jacobian at every step, shrinking or growing exponentially with distance.
+
+Q: Which LSTM component allows gradients to flow across many time steps with little attenuation? [M]
+- The output gate
+* The cell state with its additive update controlled by the forget gate
+- The tanh on the hidden state
+- The input embedding
+> c_t = f_t * c_(t-1) + i_t * g_t is additive; when the forget gate is near 1 the gradient along the cell state is preserved.
+
+Q: An LSTM has how many gates, and a GRU how many? [E]
+- 2 and 3
+* 3 and 2
+- 4 and 4
+- 1 and 2
+> LSTM: input, forget and output gates (plus a candidate cell). GRU: update and reset gates, with no separate cell state.
+
+Q: Teacher forcing during training of an autoregressive decoder means [M]
+- the teacher model generates the labels
+* feeding the ground-truth previous token as the decoder input instead of the model's own prediction
+- forcing the encoder weights to be frozen
+- using a larger learning rate for the decoder
+> It allows parallel, stable training but creates exposure bias: at inference the model conditions on its own, possibly wrong, outputs.
+
+Q: Truncated backpropagation through time [M]
+- removes the hidden state between batches
+* limits how many time steps gradients are propagated back, trading long-range credit assignment for memory and speed
+- trains only the last layer
+- doubles the sequence length
+> The hidden state is carried forward, but the graph is cut every k steps so the backward pass has bounded cost.
+
+Q: The original motivation for attention in encoder-decoder models (Bahdanau et al.) was to [M]
+- speed up training on GPUs
+* remove the bottleneck of compressing the whole source sentence into one fixed-size vector
+- eliminate the need for an encoder
+- make the model smaller
+> The decoder attends to all encoder states at each step, computing a context vector as a weighted sum relevant to the current output.
+
+Q: In scaled dot-product attention, the scores Q K^T are divided by sqrt(d_k) because [M]
+- it normalizes the outputs to unit norm
+* dot products grow in magnitude with dimension, pushing the softmax into regions with tiny gradients
+- it makes attention weights sum to d_k
+- it reduces memory use
+> For unit-variance components the dot product has variance d_k; scaling keeps the logits at a scale where softmax is not saturated.
+
+Q: The time and memory complexity of full self-attention with respect to sequence length n is [E]
+- O(n)
+- O(n log n)
+* O(n^2)
+- O(n^3)
+> Every token attends to every other token, giving an n x n attention matrix per head.
+
+Q: Multi-head attention uses several heads so that [M]
+- the model has fewer parameters
+* different heads can attend to different positions and representation subspaces
+- the sequence length is reduced
+- the softmax is avoided
+> Each head has its own projections; outputs are concatenated and projected. With head dimension d_model / h the total cost is similar to one full-size head.
+
+Q: Self-attention without positional information is [M]
+- translation invariant
+* permutation equivariant: permuting the input tokens permutes the outputs in the same way
+- unable to process more than one token
+- equivalent to a convolution
+> Attention treats its input as a set, so order must be injected through positional encodings or relative position biases.
+
+Q: A causal (look-ahead) mask in a decoder ensures that [E]
+- padding tokens are ignored
+* position i can only attend to positions up to and including i
+- attention weights are uniform
+- only the last token receives gradients
+> Masking future positions (setting their scores to -inf before the softmax) preserves the autoregressive factorization during parallel training.
+
+Q: Bidirectional RNNs cannot be used directly for [M]
+- sequence tagging
+- sentence classification
+* left-to-right autoregressive generation
+- encoding the source sentence in translation
+> A bidirectional model conditions on future tokens, which are not available when generating one token at a time.
+
+Q: CTC loss is designed for sequence tasks where [H]
+- input and output have the same length and are aligned
+* the alignment between a long input and a shorter output sequence is unknown, such as speech recognition
+- outputs are continuous values
+- the output is longer than the input
+> CTC sums over all monotonic alignments using a blank symbol and dynamic programming, with outputs conditionally independent given the input.
+
+Q: Cross-attention in an encoder-decoder Transformer takes [M]
+- queries, keys and values all from the decoder
+* queries from the decoder and keys and values from the encoder output
+- queries from the encoder and keys from the decoder
+- no queries
+> Each decoder position queries the encoded source; self-attention uses the same sequence for all three roles.
+
+Q: Compared with an LSTM, a GRU [M]
+- has more parameters per unit
+* has fewer parameters, merging the forget and input gates into an update gate and dropping the separate cell state
+- cannot model long dependencies at all
+- requires attention to work
+> GRUs are somewhat cheaper and often perform comparably; neither is uniformly better.
+
+Q: Why can Transformers be trained more efficiently than RNNs on modern hardware? [E]
+- They have fewer parameters
+* All positions in a sequence are processed in parallel rather than sequentially
+- They do not use backpropagation
+- They need no positional information
+> RNN computation is inherently sequential in time; self-attention and feed-forward layers operate on all positions at once.
+
+Q: The maximum path length between any two positions in a self-attention layer versus a recurrent layer is [M]
+- O(n) versus O(1)
+* O(1) versus O(n)
+- O(log n) versus O(n^2)
+- O(n) versus O(n)
+> Attention connects every pair directly, which eases learning long-range dependencies; RNN signals must traverse all intermediate steps.
+
+Q: Padding masks in batched sequence models are needed to [E]
+- prevent attending to future tokens
+* stop padded positions from influencing attention weights and the loss
+- reduce the vocabulary size
+- shuffle the batch
+> Sequences are padded to equal length; masks exclude those positions from attention and from loss averaging.
+
+Q: Beam search with beam width 1 is equivalent to [E]
+- random sampling
+* greedy decoding
+- exhaustive search
+- nucleus sampling
+> With a single hypothesis the search keeps only the most probable next token at each step.
+
+Q: Scheduled sampling was proposed to reduce [H]
+- vanishing gradients
+* exposure bias, by sometimes feeding the model's own predictions during training
+- the memory use of attention
+- tokenization errors
+> Mixing ground-truth and predicted inputs gradually exposes the decoder to its own mistakes, narrowing the train/inference gap.
+
+Q: Additive (Bahdanau) attention differs from dot-product (Luong) attention in that it [H]
+- has no learnable parameters
+* scores a query-key pair with a small feed-forward network instead of an inner product
+- can only attend to one position
+- requires equal sequence lengths
+> score = v^T tanh(W_q q + W_k k). Dot-product attention is faster with optimized matrix multiplication, hence its use in Transformers.
+
+Q: In an LSTM, initializing the forget-gate bias to a positive value (such as 1) helps because [H]
+- it speeds up the tanh computation
+* the cell initially retains its state, so gradients flow over long ranges early in training
+- it prevents the input gate from opening
+- it makes the model linear
+> A forget gate near 1 at the start avoids prematurely erasing memory before the network has learned what to forget.
+
+Q: The sinusoidal positional encoding of the original Transformer was chosen partly because [M]
+- it is learned from data
+* relative offsets correspond to linear transformations of the encoding, and it extends to unseen lengths
+- it reduces attention cost to linear
+- it removes the need for embeddings
+> For any fixed offset k, PE(pos + k) is a linear function of PE(pos), which makes attending by relative position easy to learn.
+
+Q: Gradient clipping is especially associated with RNN training because [E]
+- RNNs have no biases
+* repeated multiplication by the recurrent weights can make gradients explode
+- RNN gradients are always zero
+- clipping increases the hidden size
+> Exploding gradients are handled by clipping; vanishing gradients need architectural solutions such as gating.
+
+Q: A 1-D temporal convolutional network (TCN) with dilations doubling each layer achieves a receptive field that grows [H]
+- linearly with depth
+* exponentially with depth
+- logarithmically with depth
+- not at all
+> With dilation 2^l at layer l, the receptive field roughly doubles per layer, allowing long contexts with few layers (as in WaveNet).

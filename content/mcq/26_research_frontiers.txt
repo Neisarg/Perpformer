@@ -1,0 +1,178 @@
+# topic: Research Frontiers
+# id: frontier
+# subtopics: Mechanistic interpretability (superposition, sparse autoencoders, circuits, steering); State-space models and attention alternatives; Model merging and task arithmetic; Test-time compute and reasoning; Synthetic data and model collapse; World models and JEPA; Privacy, robustness and unlearning; Training dynamics (grokking, NTK, in-context learning); Alignment and safety research
+
+Q: "Superposition" in mechanistic interpretability refers to [H]
+- stacking several models into an ensemble
+* a network representing more features than it has dimensions by using non-orthogonal directions, exploiting feature sparsity
+- adding positional encodings to embeddings
+- averaging the weights of two checkpoints
+> Sparse features rarely co-occur, so the network can pack many of them into few dimensions at the cost of small interference; this makes individual neurons polysemantic.
+
+Q: Sparse autoencoders (SAEs) are trained on a model's activations in order to [H]
+- compress the model for deployment
+* decompose activations into a larger set of sparsely active, more interpretable feature directions
+- replace the attention layers
+- speed up tokenization
+> An over-complete dictionary with a sparsity penalty separates superposed features, giving units that often correspond to single concepts.
+
+Q: Activation steering changes a model's behaviour by [M]
+- fine-tuning all weights
+* adding a chosen direction vector to intermediate activations at inference time
+- editing the prompt only
+- changing the sampling temperature
+> A steering vector (for example the mean activation difference between two sets of prompts, or an SAE feature) shifts the residual stream toward a concept without training.
+
+Q: An "induction head" is an attention circuit that [H]
+- attends uniformly to all tokens
+* finds an earlier occurrence of the current token and copies the token that followed it, completing patterns like A B ... A -> B
+- only attends to the first token
+- implements positional encoding
+> Induction heads are a well-studied mechanism behind in-context pattern completion; their formation coincides with a sharp drop in loss during training.
+
+Q: Grokking refers to [M]
+- instant convergence in one step
+* a network suddenly generalizing long after it has perfectly fit the training set
+- catastrophic forgetting
+- training with labels removed
+> On small algorithmic tasks, validation accuracy can jump from chance to near-perfect after extended training, often linked to weight decay favouring a simpler general solution over memorization.
+
+Q: Selective state-space models such as Mamba are attractive for long sequences because [H]
+- they use quadratic attention
+* their computation and memory scale linearly with sequence length while input-dependent dynamics let them select what to remember
+- they have no parameters
+- they cannot be trained in parallel
+> A structured recurrent state with data-dependent transition parameters replaces attention; training uses a parallel scan.
+
+Q: Task arithmetic for model merging defines a task vector as [H]
+- the gradient at initialization
+* the difference between fine-tuned weights and the pretrained weights, which can be added, scaled or negated
+- the embedding of the task description
+- the bias terms of the last layer
+> Adding task vectors from several fine-tunes of the same base combines skills; negating one can remove a behaviour. Methods such as TIES resolve sign conflicts.
+
+Q: Averaging the weights of several models fine-tuned from the same initialization ("model soups") works because [H]
+- all neural networks are linear
+* such models often lie in the same low-loss basin, so their average also has low loss
+- averaging removes all parameters
+- the models were trained on identical batches
+> Linear mode connectivity among fine-tunes of a shared pretrained model makes interpolation safe, unlike for independently initialized networks.
+
+Q: "Model collapse" from recursive training on synthetic data means [M]
+- the model's weights become zero
+* successive generations trained on earlier models' outputs lose the tails of the distribution and degrade in diversity and quality
+- the model refuses to answer
+- training becomes faster each generation
+> Sampling and approximation errors compound across generations; mixing in real data and filtering mitigate it.
+
+Q: Test-time compute scaling refers to [M]
+- training for more epochs
+* improving answer quality by spending more inference computation, for example longer reasoning, search or sampling and verification
+- using a larger batch at inference
+- quantizing the model at test time
+> Reasoning budgets, self-consistency, tree search and verifier-guided sampling trade latency and cost for accuracy without changing weights.
+
+Q: JEPA-style (joint-embedding predictive) self-supervised learning differs from masked autoencoding in that it [H]
+- reconstructs pixels exactly
+* predicts the representations of masked or future regions in embedding space instead of raw inputs
+- needs labels
+- uses a GAN discriminator
+> Predicting abstract representations avoids modeling unpredictable low-level detail; collapse is prevented by tricks such as an EMA target encoder.
+
+Q: A learned "world model" in model-based RL or video prediction is [M]
+- a map of the world's countries
+* a model that predicts future observations or latent states given actions, usable for planning and for training in imagination
+- a larger tokenizer
+- a rule-based simulator written by hand
+> Agents such as Dreamer learn compact latent dynamics and train policies on imagined rollouts.
+
+Q: DP-SGD provides differential privacy by [H]
+- encrypting the weights
+* clipping each example's gradient to a fixed norm and adding calibrated Gaussian noise to the summed gradient
+- training on synthetic data only
+- removing rare tokens from the vocabulary
+> Clipping bounds any single example's influence and noise masks it; a privacy accountant tracks the cumulative epsilon.
+
+Q: An adversarial example is [E]
+- a mislabeled training example
+* an input with a small, often imperceptible perturbation crafted to cause a wrong prediction
+- an example from a different dataset
+- a very long prompt
+> FGSM and PGD find such perturbations using gradients; adversarial training is the main empirical defence.
+
+Q: Federated learning trains a shared model by [M]
+- collecting all raw data on a central server
+* having clients compute updates on their local data and sending only model updates to be aggregated
+- training one model per client with no sharing
+- sharing labels but not features
+> FedAvg averages client updates; challenges include non-i.i.d. data, communication cost and privacy leakage through updates.
+
+Q: Machine unlearning aims to [M]
+- train models faster
+* remove the influence of specific training data from a trained model without retraining from scratch
+- delete the model after use
+- prevent overfitting with dropout
+> It is motivated by privacy and copyright requests; verifying that the influence is truly gone is an open research problem.
+
+Q: Statistical watermarking of LLM text typically works by [H]
+- adding invisible Unicode characters
+* biasing sampling toward a pseudo-random "green list" of tokens determined by the preceding context, detectable with a statistical test
+- changing the font
+- appending a signature sentence
+> The bias is imperceptible per token but accumulates over many tokens; paraphrasing weakens it.
+
+Q: Catastrophic forgetting in continual learning is [E]
+- running out of disk space
+* a network losing performance on earlier tasks when trained sequentially on new ones
+- forgetting to save checkpoints
+- overfitting to the first task
+> Remedies include replaying old data, regularizing important weights (EWC) and parameter isolation such as adapters.
+
+Q: The neural tangent kernel (NTK) regime describes [H]
+- training with very small networks
+* infinitely wide networks whose training dynamics become linear in the parameters and equivalent to kernel regression
+- networks without activation functions
+- quantized networks
+> In this lazy regime features barely change; it explains some properties of wide networks but not the feature learning seen in practice.
+
+Q: "Specification gaming" or reward hacking occurs when [M]
+- the reward is too small to matter
+* a system achieves high measured reward by exploiting flaws in the objective rather than doing the intended task
+- the model refuses the task
+- two agents share a reward
+> Examples include editing tests instead of fixing code. Better reward design, held-out checks and monitoring reduce it.
+
+Q: Discrete diffusion language models generate text by [H]
+- strictly left-to-right sampling
+* starting from masked or noised token sequences and iteratively denoising many positions in parallel
+- retrieving sentences from a database
+- beam search over characters
+> Parallel refinement can offer faster generation and flexible infilling compared with autoregression, with different quality trade-offs.
+
+Q: A membership inference attack tries to determine [M]
+- the model's architecture
+* whether a specific example was part of a model's training data
+- the model's learning rate
+- the GPU it was trained on
+> Models tend to be more confident on training examples; such attacks quantify privacy leakage and memorization.
+
+Q: Evaluation awareness is a concern for safety testing because [H]
+- models cannot be evaluated at all
+* a model that can tell it is being tested may behave differently than it would in deployment, making eval results unrepresentative
+- it increases inference cost
+- it reduces the context window
+> Realistic test environments and interpretability checks are used to detect and reduce this gap.
+
+Q: Constitutional or classifier-based safeguards around an LLM work by [M]
+- retraining the base model for every request
+* screening inputs and outputs with separate classifiers trained to detect disallowed content
+- lowering the sampling temperature
+- removing the system prompt
+> Independent classifiers add a layer of defence against jailbreaks that does not rely on the main model's own refusals.
+
+Q: Mechanistic interpretability "circuits" research attempts to [M]
+- design new GPU hardware
+* identify the specific components (heads, neurons, features) and their interactions that implement a behaviour
+- increase the number of layers
+- train models without data
+> Techniques such as activation patching and attribution graphs localize computation by intervening on internal activations and observing the effect.

@@ -1,0 +1,714 @@
+# topic: RAG & Agents
+# id: agents
+# subtopics: Embedding retrieval and BM25; MMR and rank fusion; Chunking; Retrieval metrics; Parsing tool calls; The agent loop; Context-window management; Agent reliability metrics
+
+=== cosine-top-k | Cosine Top-k Retrieval | Easy
+--- description
+Implement `top_k_retrieve(query, docs, k)` for dense retrieval.
+
+- `query`: `(D,)` embedding, `docs`: `(N, D)` document embeddings
+- score every document by cosine similarity with the query
+- return `(indices, scores)`: the indices of the `k` most similar documents in decreasing order of similarity (`torch.long`, shape `(k,)`) and their similarities
+
+If `k > N`, return all `N` documents.
+--- starter
+import torch
+
+
+def top_k_retrieve(query: torch.Tensor, docs: torch.Tensor, k: int):
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def top_k_retrieve(query: torch.Tensor, docs: torch.Tensor, k: int):
+    q = query / query.norm()
+    d = docs / docs.norm(dim=1, keepdim=True)
+    sims = d @ q
+    k = min(k, docs.shape[0])
+    scores, indices = sims.topk(k)
+    return indices, scores
+--- tests
+def test_basic():
+    """Direction matters, magnitude does not"""
+    docs = torch.tensor([[1.0, 0.0], [0.0, 5.0], [10.0, 10.0], [-1.0, 0.0]])
+    idx, scores = top_k_retrieve(torch.tensor([2.0, 0.0]), docs, 2)
+    check_equal(idx, torch.tensor([0, 2]), name="indices")
+    check_close(scores, [1.0, math.sqrt(0.5)], name="scores")
+
+def test_all_documents_sorted():
+    """k = N returns every document in decreasing similarity"""
+    docs, q = torch.randn(12, 8), torch.randn(8)
+    idx, scores = top_k_retrieve(q, docs, 12)
+    ref = torch.nn.functional.cosine_similarity(docs, q.unsqueeze(0), dim=1)
+    check_equal(idx, ref.argsort(descending=True), name="indices")
+    check_close(scores, ref.sort(descending=True).values, name="scores")
+
+def test_k_larger_than_corpus():
+    """k > N returns N results"""
+    idx, scores = top_k_retrieve(torch.randn(4), torch.randn(3, 4), 10)
+    check_shape(idx, (3,), "indices")
+    check_shape(scores, (3,), "scores")
+
+def test_opposite_direction_is_last():
+    """An opposite vector has similarity -1 and ranks last"""
+    docs = torch.tensor([[-3.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    idx, scores = top_k_retrieve(torch.tensor([1.0, 0.0]), docs, 3)
+    check_equal(idx, torch.tensor([2, 1, 0]), name="indices")
+    check_close(scores[-1], -1.0, name="lowest score")
+--- hints
+- Normalize the query and every document to unit length; the dot product is then the cosine.
+- topk returns the values and indices already sorted.
+
+=== bm25 | BM25 Scoring | Medium
+--- description
+Implement `bm25_scores(query, docs, k1=1.5, b=0.75)`.
+
+`query` is a list of tokens and `docs` a list of tokenized documents. For each document `d`, sum over the distinct query terms `t`:
+
+```
+idf(t)   = ln((N - df(t) + 0.5) / (df(t) + 0.5) + 1)
+score(d) = sum_t idf(t) * tf(t, d) * (k1 + 1) / (tf(t, d) + k1 * (1 - b + b * len(d) / avgdl))
+```
+
+`N` is the number of documents, `df(t)` the number of documents containing `t`, `tf(t, d)` the count of `t` in `d`, and `avgdl` the average document length. Return a float tensor of shape `(N,)`.
+--- starter
+import math
+import torch
+
+
+def bm25_scores(query: list, docs: list, k1: float = 1.5, b: float = 0.75) -> torch.Tensor:
+    # TODO
+    pass
+--- solution
+import math
+import torch
+
+
+def bm25_scores(query: list, docs: list, k1: float = 1.5, b: float = 0.75) -> torch.Tensor:
+    n = len(docs)
+    avgdl = sum(len(d) for d in docs) / n
+    scores = torch.zeros(n)
+    for term in set(query):
+        df = sum(1 for d in docs if term in d)
+        idf = math.log((n - df + 0.5) / (df + 0.5) + 1)
+        for i, d in enumerate(docs):
+            tf = d.count(term)
+            if tf == 0:
+                continue
+            scores[i] += idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len(d) / avgdl))
+    return scores
+--- tests
+DOCS = [["the", "cat", "sat"], ["the", "dog", "sat", "on", "the", "log"], ["cats", "and", "dogs"]]
+
+def test_single_term():
+    """One query term, hand-computed"""
+    s = bm25_scores(["cat"], DOCS)
+    idf = math.log((3 - 1 + 0.5) / (1 + 0.5) + 1)
+    expected0 = idf * 1 * 2.5 / (1 + 1.5 * (1 - 0.75 + 0.75 * 3 / 4))
+    check_close(s, [expected0, 0.0, 0.0])
+
+def test_multiple_terms():
+    """Scores add over query terms"""
+    s = bm25_scores(["the", "log"], DOCS)
+    idf_the = math.log((3 - 2 + 0.5) / (2 + 0.5) + 1)
+    idf_log = math.log((3 - 1 + 0.5) / (1 + 0.5) + 1)
+    d0 = idf_the * 1 * 2.5 / (1 + 1.5 * (0.25 + 0.75 * 3 / 4))
+    norm1 = 1.5 * (0.25 + 0.75 * 6 / 4)
+    d1 = idf_the * 2 * 2.5 / (2 + norm1) + idf_log * 1 * 2.5 / (1 + norm1)
+    check_close(s, [d0, d1, 0.0])
+
+def test_duplicate_query_terms_and_unknown_terms():
+    """Repeated query terms count once; unseen terms contribute nothing"""
+    check_close(bm25_scores(["cat", "cat", "zebra"], DOCS), bm25_scores(["cat"], DOCS))
+
+def test_length_normalization():
+    """With equal term frequency the shorter document scores higher; b = 0 removes the effect"""
+    docs = [["x", "a"], ["x", "a", "b", "c", "d", "e"]]
+    s = bm25_scores(["x"], docs)
+    check_true(s[0] > s[1], "the shorter document should score higher")
+    s0 = bm25_scores(["x"], docs, b=0.0)
+    check_close(s0[0], s0[1], name="scores with b = 0")
+
+def test_saturation():
+    """Term frequency saturates: 10 occurrences score less than 10x one occurrence"""
+    docs = [["x"] + ["pad"] * 9, ["x"] * 10]
+    s = bm25_scores(["x"], docs)
+    check_true(s[1] > s[0] and s[1] < 3 * s[0], "term-frequency saturation is missing")
+--- hints
+- Precompute N, avgdl and, per distinct query term, the document frequency and idf.
+- Skip documents where the term frequency is zero.
+
+=== mmr | Maximal Marginal Relevance | Medium
+--- description
+Implement `mmr(query, docs, k, lam)` to select documents that are relevant but not redundant.
+
+- `query`: `(D,)`, `docs`: `(N, D)`; use cosine similarity throughout
+- select greedily. At each step choose the unselected document maximizing
+
+```
+lam * sim(query, d) - (1 - lam) * max over selected s of sim(d, s)
+```
+
+(the second term is 0 while nothing is selected). Break ties by the lowest index.
+
+Return the selected indices as a list of ints, in selection order, of length `min(k, N)`.
+--- starter
+import torch
+
+
+def mmr(query: torch.Tensor, docs: torch.Tensor, k: int, lam: float = 0.5) -> list:
+    # TODO
+    pass
+--- solution
+import torch
+
+
+def mmr(query: torch.Tensor, docs: torch.Tensor, k: int, lam: float = 0.5) -> list:
+    d = docs / docs.norm(dim=1, keepdim=True)
+    q = query / query.norm()
+    rel = d @ q
+    sim = d @ d.T
+    selected = []
+    remaining = list(range(docs.shape[0]))
+    while remaining and len(selected) < k:
+        best, best_score = None, None
+        for i in remaining:
+            redundancy = max(sim[i, j].item() for j in selected) if selected else 0.0
+            score = lam * rel[i].item() - (1 - lam) * redundancy
+            if best_score is None or score > best_score + 1e-9:
+                best, best_score = i, score
+        selected.append(best)
+        remaining.remove(best)
+    return selected
+--- tests
+def _docs():
+    return torch.tensor([[1.0, 0.0], [0.99, 0.1], [0.6, 0.8], [0.0, 1.0]])
+
+def test_pure_relevance():
+    """lam = 1 is ordinary top-k by similarity"""
+    q = torch.tensor([1.0, 0.3])
+    check_equal(mmr(q, _docs(), 3, 1.0), [1, 0, 2])
+
+def test_diversity():
+    """A near-duplicate of the first pick is skipped when diversity matters"""
+    q = torch.tensor([1.0, 0.3])
+    check_equal(mmr(q, _docs(), 2, 0.9), [1, 0], name="lam = 0.9")
+    check_equal(mmr(q, _docs(), 2, 0.5), [1, 3], name="lam = 0.5")
+
+def test_first_pick_is_most_relevant():
+    """The first selection only depends on relevance"""
+    q = torch.tensor([0.0, 1.0])
+    check_equal(mmr(q, _docs(), 1, 0.1), [3])
+
+def test_k_larger_than_corpus():
+    """k > N returns every document exactly once"""
+    out = mmr(torch.tensor([1.0, 1.0]), _docs(), 10, 0.7)
+    check_equal(sorted(out), [0, 1, 2, 3])
+
+def test_duplicates():
+    """Of two identical documents the lowest index is picked first, and its copy is then penalized"""
+    docs = torch.tensor([[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    check_equal(mmr(torch.tensor([1.0, 0.0]), docs, 1, 0.5), [0], name="k = 1")
+    check_equal(mmr(torch.tensor([1.0, 0.0]), docs, 2, 0.4), [0, 2], name="k = 2")
+--- hints
+- Precompute the relevance vector and the document-document similarity matrix once.
+- Iterate candidates in index order and only replace the best on a strictly higher score.
+
+=== chunking | Chunking with Overlap | Easy
+--- description
+Implement `chunk_tokens(tokens, chunk_size, overlap)` to split a token list into overlapping chunks for retrieval.
+
+- consecutive chunks start `chunk_size - overlap` tokens apart
+- each chunk has at most `chunk_size` tokens; the last one may be shorter
+- stop once a chunk reaches the end of the list (do not emit further chunks that would be fully contained in the previous one)
+- an empty input returns an empty list
+
+`0 <= overlap < chunk_size`.
+
+**Example**
+
+```
+chunk_tokens([1, 2, 3, 4, 5, 6, 7], 4, 2)  ->  [[1, 2, 3, 4], [3, 4, 5, 6], [5, 6, 7]]
+```
+--- starter
+def chunk_tokens(tokens: list, chunk_size: int, overlap: int = 0) -> list:
+    # TODO
+    pass
+--- solution
+def chunk_tokens(tokens: list, chunk_size: int, overlap: int = 0) -> list:
+    chunks = []
+    step = chunk_size - overlap
+    start = 0
+    while start < len(tokens):
+        chunks.append(tokens[start:start + chunk_size])
+        if start + chunk_size >= len(tokens):
+            break
+        start += step
+    return chunks
+--- tests
+def test_example():
+    """Example from the description"""
+    check_equal(chunk_tokens([1, 2, 3, 4, 5, 6, 7], 4, 2), [[1, 2, 3, 4], [3, 4, 5, 6], [5, 6, 7]])
+
+def test_no_overlap():
+    """overlap = 0 partitions the list"""
+    check_equal(chunk_tokens(list(range(7)), 3, 0), [[0, 1, 2], [3, 4, 5], [6]])
+
+def test_exact_fit_has_no_trailing_chunk():
+    """No redundant final chunk when a chunk ends exactly at the end"""
+    check_equal(chunk_tokens([1, 2, 3, 4, 5, 6], 4, 2), [[1, 2, 3, 4], [3, 4, 5, 6]])
+    check_equal(chunk_tokens([1, 2, 3, 4], 4, 3), [[1, 2, 3, 4]])
+
+def test_short_and_empty_input():
+    """Inputs shorter than one chunk, and empty inputs"""
+    check_equal(chunk_tokens(["a", "b"], 5, 2), [["a", "b"]])
+    check_equal(chunk_tokens([], 5, 2), [])
+
+def test_coverage():
+    """Every token is covered and neighbouring chunks share `overlap` tokens"""
+    tokens = list(range(53))
+    chunks = chunk_tokens(tokens, 10, 3)
+    check_equal(sorted(set(t for c in chunks for t in c)), tokens, name="covered tokens")
+    for a, b in zip(chunks[:-1], chunks[1:]):
+        check_equal(a[-3:], b[:3], name="overlap between neighbouring chunks")
+--- hints
+- Advance the start by chunk_size - overlap.
+- Stop as soon as a chunk reaches the end of the list.
+
+=== reciprocal-rank-fusion | Reciprocal Rank Fusion | Easy
+--- description
+Hybrid search merges the rankings of several retrievers. Implement `reciprocal_rank_fusion(rankings, k=60)`.
+
+- `rankings`: a list of ranked lists of document ids (best first); a document may be missing from some lists
+- each document's fused score is the sum over lists containing it of `1 / (k + rank)`, with ranks starting at 1
+- return the document ids sorted by decreasing fused score; break ties by ascending document id
+--- starter
+def reciprocal_rank_fusion(rankings: list, k: int = 60) -> list:
+    # TODO
+    pass
+--- solution
+def reciprocal_rank_fusion(rankings: list, k: int = 60) -> list:
+    scores = {}
+    for ranking in rankings:
+        for rank, doc in enumerate(ranking, start=1):
+            scores[doc] = scores.get(doc, 0.0) + 1.0 / (k + rank)
+    return sorted(scores, key=lambda d: (-scores[d], d))
+--- tests
+def test_agreement_wins():
+    """A document ranked well by both lists beats one ranked first by only one"""
+    out = reciprocal_rank_fusion([["a", "b", "c"], ["b", "d", "a"]], k=60)
+    check_equal(out, ["b", "a", "d", "c"])
+
+def test_single_list():
+    """One ranking is returned unchanged"""
+    check_equal(reciprocal_rank_fusion([["x", "y", "z"]]), ["x", "y", "z"])
+
+def test_tie_break():
+    """Equal scores are ordered by document id"""
+    check_equal(reciprocal_rank_fusion([["b", "a"], ["a", "b"]], k=10), ["a", "b"])
+
+def test_small_k_and_missing_docs():
+    """A small k weights top ranks more heavily"""
+    out = reciprocal_rank_fusion([[1, 2, 3], [4, 2], [4]], k=1)
+    check_equal(out, [4, 2, 1, 3])
+
+def test_empty():
+    """No rankings, or empty rankings, give an empty result"""
+    check_equal(reciprocal_rank_fusion([]), [])
+    check_equal(reciprocal_rank_fusion([[], []]), [])
+--- hints
+- Accumulate 1 / (k + rank) per document in a dict, with ranks from enumerate(..., start=1).
+- Sort by (-score, doc_id).
+
+=== retrieval-metrics | Recall@k and MRR | Easy
+--- description
+Implement two retrieval metrics.
+
+`recall_at_k(retrieved, relevant, k)`: the fraction of the relevant ids that appear among the first `k` retrieved ids. `retrieved` is a ranked list and `relevant` a set (or list) of ids. Return `0.0` when there are no relevant ids.
+
+`mean_reciprocal_rank(results)`: `results` is a list of `(retrieved, relevant)` pairs, one per query. For each query take `1 / rank` of the first relevant id in `retrieved` (ranks start at 1), or 0 if none is retrieved; return the mean over queries, and `0.0` for an empty list.
+--- starter
+def recall_at_k(retrieved: list, relevant, k: int) -> float:
+    # TODO
+    pass
+
+
+def mean_reciprocal_rank(results: list) -> float:
+    # TODO
+    pass
+--- solution
+def recall_at_k(retrieved: list, relevant, k: int) -> float:
+    relevant = set(relevant)
+    if not relevant:
+        return 0.0
+    return len(relevant & set(retrieved[:k])) / len(relevant)
+
+
+def mean_reciprocal_rank(results: list) -> float:
+    if not results:
+        return 0.0
+    total = 0.0
+    for retrieved, relevant in results:
+        relevant = set(relevant)
+        for rank, doc in enumerate(retrieved, start=1):
+            if doc in relevant:
+                total += 1.0 / rank
+                break
+    return total / len(results)
+--- tests
+def test_recall():
+    """Two of three relevant documents in the top 3"""
+    retrieved = ["d1", "d7", "d3", "d9", "d2"]
+    check_close(recall_at_k(retrieved, {"d3", "d2", "d1"}, 3), 2 / 3)
+    check_close(recall_at_k(retrieved, {"d3", "d2", "d1"}, 5), 1.0)
+    check_close(recall_at_k(retrieved, {"d3", "d2", "d1"}, 0), 0.0)
+
+def test_recall_edge_cases():
+    """No relevant documents, list input and k beyond the list length"""
+    check_close(recall_at_k(["a", "b"], set(), 2), 0.0)
+    check_close(recall_at_k(["a", "b"], ["b", "z"], 10), 0.5)
+
+def test_mrr():
+    """Ranks 1, 3 and not found"""
+    results = [(["a", "b"], {"a"}), (["x", "y", "z"], {"z", "q"}), (["m", "n"], {"k"})]
+    check_close(mean_reciprocal_rank(results), (1 + 1 / 3 + 0) / 3)
+
+def test_mrr_uses_first_relevant():
+    """Only the first relevant hit counts"""
+    check_close(mean_reciprocal_rank([(["a", "b", "c"], {"b", "c"})]), 0.5)
+    check_close(mean_reciprocal_rank([]), 0.0)
+--- hints
+- Recall: size of the intersection of relevant ids with the top k, over the number of relevant ids.
+- MRR: find the first relevant position per query, add 1 / rank, average over queries.
+
+=== parse-tool-call | Parsing Tool Calls | Medium
+--- description
+A model asks for a tool by emitting a JSON object inside `<tool_call>` tags, possibly surrounded by other text:
+
+```
+Let me check. <tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>
+```
+
+Implement `parse_tool_call(text)`:
+
+- return a dict `{"name": str, "arguments": dict}` for the first well-formed tool call in `text`
+- the JSON may contain whitespace and newlines around it
+- return `None` if there is no `<tool_call>...</tool_call>` block, the content is not valid JSON, the JSON is not an object, `name` is missing or not a string, or `arguments` is present but not an object
+- a missing `arguments` key means no arguments: use `{}`
+
+Extra keys in the JSON object are ignored.
+--- starter
+import json
+import re
+
+
+def parse_tool_call(text: str):
+    # TODO
+    pass
+--- solution
+import json
+import re
+
+
+def parse_tool_call(text: str):
+    match = re.search(r"<tool_call>(.*?)</tool_call>", text, flags=re.S)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(1).strip())
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    name = data.get("name")
+    if not isinstance(name, str):
+        return None
+    arguments = data.get("arguments", {})
+    if not isinstance(arguments, dict):
+        return None
+    return {"name": name, "arguments": arguments}
+--- tests
+def test_basic():
+    """A call embedded in text"""
+    text = 'Let me check. <tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call> One moment.'
+    check_equal(parse_tool_call(text), {"name": "get_weather", "arguments": {"city": "Paris"}})
+
+def test_multiline_and_nested():
+    """Whitespace, newlines and nested arguments"""
+    text = '<tool_call>\n  {"name": "search",\n   "arguments": {"query": "a } b", "filters": {"year": [2024, 2025]}, "k": 3}}\n</tool_call>'
+    check_equal(parse_tool_call(text), {"name": "search", "arguments": {"query": "a } b", "filters": {"year": [2024, 2025]}, "k": 3}})
+
+def test_no_call():
+    """Plain text or unclosed tags return None"""
+    check_equal(parse_tool_call("The answer is 42."), None)
+    check_equal(parse_tool_call('<tool_call>{"name": "x", "arguments": {}}'), None)
+
+def test_invalid_json_and_wrong_types():
+    """Malformed content returns None"""
+    check_equal(parse_tool_call("<tool_call>{name: search}</tool_call>"), None, name="invalid JSON")
+    check_equal(parse_tool_call('<tool_call>["search"]</tool_call>'), None, name="JSON array")
+    check_equal(parse_tool_call('<tool_call>{"arguments": {}}</tool_call>'), None, name="missing name")
+    check_equal(parse_tool_call('<tool_call>{"name": 5, "arguments": {}}</tool_call>'), None, name="non-string name")
+    check_equal(parse_tool_call('<tool_call>{"name": "f", "arguments": "x=1"}</tool_call>'), None, name="non-object arguments")
+
+def test_defaults_and_first_call():
+    """Missing arguments default to {}; extra keys are dropped; the first call wins"""
+    check_equal(parse_tool_call('<tool_call>{"name": "now", "id": "c1"}</tool_call>'), {"name": "now", "arguments": {}})
+    two = '<tool_call>{"name": "a"}</tool_call> then <tool_call>{"name": "b"}</tool_call>'
+    check_equal(parse_tool_call(two), {"name": "a", "arguments": {}})
+--- hints
+- A non-greedy regex with the DOTALL flag extracts the block; json.loads does the parsing.
+- Validate types explicitly: the model's output is untrusted input.
+
+=== agent-loop | The Agent Loop | Hard
+--- description
+Implement the core loop of a tool-using agent.
+
+`run_agent(llm, tools, user_message, max_steps)`:
+
+- `llm(messages)` returns either `{"type": "final", "content": str}` or `{"type": "tool_call", "name": str, "arguments": dict}`
+- `tools` maps tool names to Python callables invoked as `tool(**arguments)`
+
+Start with `messages = [{"role": "user", "content": user_message}]` and repeat up to `max_steps` times:
+
+1. call `llm(messages)`
+2. if it is final, append `{"role": "assistant", "content": content}` and return `(content, messages)`
+3. otherwise append `{"role": "assistant", "tool_call": {"name": name, "arguments": arguments}}`, run the tool, and append `{"role": "tool", "name": name, "content": result}` where `result` is `str(return value)`
+
+Tool failures must not crash the loop; report them to the model instead:
+
+- unknown tool name: `result = "error: unknown tool <name>"`
+- the tool raises an exception `e`: `result = "error: <str(e)>"`
+
+If the model has not produced a final answer after `max_steps` LLM calls, return `(None, messages)`.
+--- starter
+def run_agent(llm, tools: dict, user_message: str, max_steps: int = 5):
+    # TODO
+    pass
+--- solution
+def run_agent(llm, tools: dict, user_message: str, max_steps: int = 5):
+    messages = [{"role": "user", "content": user_message}]
+    for _ in range(max_steps):
+        reply = llm(messages)
+        if reply["type"] == "final":
+            messages.append({"role": "assistant", "content": reply["content"]})
+            return reply["content"], messages
+        name, arguments = reply["name"], reply.get("arguments", {})
+        messages.append({"role": "assistant", "tool_call": {"name": name, "arguments": arguments}})
+        if name not in tools:
+            result = "error: unknown tool %s" % name
+        else:
+            try:
+                result = str(tools[name](**arguments))
+            except Exception as exc:
+                result = "error: %s" % exc
+        messages.append({"role": "tool", "name": name, "content": result})
+    return None, messages
+--- tests
+def _scripted(replies):
+    state = {"i": 0, "seen": []}
+    def llm(messages):
+        state["seen"].append([dict(m) for m in messages])
+        reply = replies[min(state["i"], len(replies) - 1)]
+        state["i"] += 1
+        return reply
+    return llm, state
+
+def test_direct_answer():
+    """No tool needed"""
+    llm, state = _scripted([{"type": "final", "content": "hi"}])
+    answer, messages = run_agent(llm, {}, "hello")
+    check_equal(answer, "hi", name="answer")
+    check_equal(messages, [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}], name="messages")
+
+def test_tool_then_answer():
+    """One tool call, then the final answer; the model sees the tool result"""
+    llm, state = _scripted([
+        {"type": "tool_call", "name": "add", "arguments": {"a": 2, "b": 3}},
+        {"type": "final", "content": "5"},
+    ])
+    answer, messages = run_agent(llm, {"add": lambda a, b: a + b}, "2+3?")
+    check_equal(answer, "5", name="answer")
+    check_equal(messages[1], {"role": "assistant", "tool_call": {"name": "add", "arguments": {"a": 2, "b": 3}}}, name="assistant tool-call message")
+    check_equal(messages[2], {"role": "tool", "name": "add", "content": "5"}, name="tool message")
+    check_equal(state["seen"][1][-1], {"role": "tool", "name": "add", "content": "5"}, name="last message seen by the second LLM call")
+    check_equal(len(messages), 4, name="number of messages")
+
+def test_unknown_tool_and_exception():
+    """Errors are reported to the model instead of raised"""
+    def boom(x):
+        raise ValueError("bad input %s" % x)
+    llm, state = _scripted([
+        {"type": "tool_call", "name": "nope", "arguments": {}},
+        {"type": "tool_call", "name": "boom", "arguments": {"x": 7}},
+        {"type": "final", "content": "gave up"},
+    ])
+    answer, messages = run_agent(llm, {"boom": boom}, "go")
+    check_equal(messages[2]["content"], "error: unknown tool nope", name="unknown-tool result")
+    check_equal(messages[4]["content"], "error: bad input 7", name="exception result")
+    check_equal(answer, "gave up", name="answer")
+
+def test_max_steps():
+    """Stops after max_steps LLM calls without a final answer"""
+    llm, state = _scripted([{"type": "tool_call", "name": "tick", "arguments": {}}])
+    counter = {"n": 0}
+    def tick():
+        counter["n"] += 1
+        return counter["n"]
+    answer, messages = run_agent(llm, {"tick": tick}, "loop", max_steps=3)
+    check_equal(answer, None, name="answer")
+    check_equal(state["i"], 3, name="number of LLM calls")
+    check_equal(counter["n"], 3, name="number of tool executions")
+    check_equal(len(messages), 7, name="number of messages")
+    check_equal(messages[-1], {"role": "tool", "name": "tick", "content": "3"}, name="last message")
+--- hints
+- Keep one growing list of messages; every LLM call receives the whole list.
+- Wrap only the tool execution in try/except so tool failures become tool results.
+
+=== trim-history | Trimming Conversation History | Medium
+--- description
+Long conversations must be cut to fit a context budget. Implement `trim_history(messages, max_tokens, count_tokens)`.
+
+- `messages`: list of dicts with `"role"` and `"content"`; `count_tokens(message)` returns a message's token count
+- if the first message has role `"system"`, it is always kept (even if it alone exceeds the budget)
+- then keep the longest suffix of the remaining messages (the most recent ones) whose total token count, together with the system message, is at most `max_tokens`
+- never split a message, and keep the original order
+
+Return the kept messages as a new list.
+--- starter
+def trim_history(messages: list, max_tokens: int, count_tokens) -> list:
+    # TODO
+    pass
+--- solution
+def trim_history(messages: list, max_tokens: int, count_tokens) -> list:
+    system = []
+    rest = messages
+    if messages and messages[0].get("role") == "system":
+        system, rest = [messages[0]], messages[1:]
+    budget = max_tokens - sum(count_tokens(m) for m in system)
+    kept = []
+    for m in reversed(rest):
+        cost = count_tokens(m)
+        if cost > budget:
+            break
+        kept.append(m)
+        budget -= cost
+    return system + kept[::-1]
+--- tests
+def _count(m):
+    return len(m["content"].split())
+
+def _msgs():
+    return [
+        {"role": "system", "content": "be brief"},
+        {"role": "user", "content": "one two three four"},
+        {"role": "assistant", "content": "five six"},
+        {"role": "user", "content": "seven eight nine"},
+        {"role": "assistant", "content": "ten"},
+    ]
+
+def test_everything_fits():
+    """Nothing is dropped when the budget is large"""
+    check_equal(trim_history(_msgs(), 100, _count), _msgs())
+
+def test_drops_oldest():
+    """The system message and the most recent messages are kept"""
+    out = trim_history(_msgs(), 8, _count)
+    check_equal([m["content"] for m in out], ["be brief", "five six", "seven eight nine", "ten"])
+
+def test_suffix_is_contiguous():
+    """A message that does not fit stops the scan, even if an older one would fit"""
+    msgs = [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": "b b b b b b"},
+        {"role": "user", "content": "c"},
+    ]
+    check_equal([m["content"] for m in trim_history(msgs, 3, _count)], ["c"])
+
+def test_no_system_message():
+    """Without a system message only the suffix rule applies"""
+    msgs = _msgs()[1:]
+    check_equal([m["content"] for m in trim_history(msgs, 4, _count)], ["seven eight nine", "ten"])
+
+def test_tiny_budget_and_empty():
+    """The system message survives a tiny budget; an empty history stays empty"""
+    check_equal([m["content"] for m in trim_history(_msgs(), 1, _count)], ["be brief"])
+    check_equal(trim_history([], 10, _count), [])
+
+def test_input_not_modified():
+    """Returns a new list and leaves the input untouched"""
+    msgs = _msgs()
+    out = trim_history(msgs, 5, _count)
+    check_equal(len(msgs), 5, name="length of the input list")
+    check_true(out is not msgs, "must return a new list")
+--- hints
+- Peel off a leading system message and subtract its cost from the budget.
+- Walk the rest from newest to oldest, stopping at the first message that does not fit, then restore the order.
+
+=== pass-hat-k | Agent Reliability: pass@k and pass^k | Medium
+--- description
+Agent benchmarks run every task several times. From `n` trials of a task with `c` successes, two metrics are estimated for a smaller number of attempts `k <= n`:
+
+- **pass@k**: the probability that at least one of `k` attempts succeeds: `1 - C(n - c, k) / C(n, k)`
+- **pass^k**: the probability that all `k` attempts succeed: `C(c, k) / C(n, k)`
+
+where `C(a, b)` is the binomial coefficient (0 when `b > a`).
+
+Implement `pass_metrics(results, k)` where `results` is a list of lists of booleans (one inner list of trial outcomes per task; all tasks have the same number of trials `n >= k`). Return `(pass_at_k, pass_hat_k)`, each averaged over tasks, as floats.
+--- starter
+import math
+
+
+def pass_metrics(results: list, k: int):
+    # TODO
+    pass
+--- solution
+import math
+
+
+def pass_metrics(results: list, k: int):
+    at_k, hat_k = 0.0, 0.0
+    for trials in results:
+        n, c = len(trials), sum(1 for t in trials if t)
+        total = math.comb(n, k)
+        at_k += 1.0 - math.comb(n - c, k) / total
+        hat_k += math.comb(c, k) / total
+    return at_k / len(results), hat_k / len(results)
+--- tests
+def test_k_one_is_success_rate():
+    """For k = 1 both metrics equal the average success rate"""
+    results = [[True, False, True, True], [False, False, True, False]]
+    at1, hat1 = pass_metrics(results, 1)
+    check_close(at1, (0.75 + 0.25) / 2, name="pass@1")
+    check_close(hat1, (0.75 + 0.25) / 2, name="pass^1")
+
+def test_hand_example():
+    """n = 4 trials, c = 2 successes, k = 2"""
+    at2, hat2 = pass_metrics([[True, True, False, False]], 2)
+    check_close(at2, 1 - 1 / 6, name="pass@2")
+    check_close(hat2, 1 / 6, name="pass^2")
+
+def test_extremes():
+    """Always-passing and always-failing tasks"""
+    at3, hat3 = pass_metrics([[True] * 5, [False] * 5], 3)
+    check_close(at3, 0.5, name="pass@3")
+    check_close(hat3, 0.5, name="pass^3")
+
+def test_reliability_gap():
+    """pass^k falls and pass@k rises as k grows"""
+    results = [[True, True, True, False, True, False, True, True]] * 3
+    values = [pass_metrics(results, k) for k in (1, 2, 4, 8)]
+    check_true(all(values[i][0] <= values[i + 1][0] + 1e-12 for i in range(3)), "pass@k should not decrease with k")
+    check_true(all(values[i][1] >= values[i + 1][1] - 1e-12 for i in range(3)), "pass^k should not increase with k")
+    check_close(values[3][0], 1.0, name="pass@8")
+    check_close(values[3][1], 0.0, name="pass^8")
+
+def test_k_equals_n():
+    """With k = n, pass^k is 1 only for a perfect task"""
+    at, hat = pass_metrics([[True, True, True], [True, True, False]], 3)
+    check_close(hat, 0.5, name="pass^3")
+    check_close(at, 1.0, name="pass@3")
+--- hints
+- math.comb(a, b) returns 0 when b > a, which handles the edge cases.

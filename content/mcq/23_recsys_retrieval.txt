@@ -1,0 +1,178 @@
+# topic: Recommender Systems & Retrieval
+# id: recsys
+# subtopics: Collaborative filtering and matrix factorization; Two-tower retrieval and approximate nearest neighbours; Ranking models and learning to rank; Negative sampling and in-batch softmax; Cold start and exploration; Position and selection bias; Multi-stage pipelines; Embedding tables and feature crosses
+
+Q: Collaborative filtering makes recommendations based on [E]
+- item content features only
+* patterns in user-item interactions across many users
+- the user's demographic profile only
+- random sampling
+> Users who behaved similarly in the past are assumed to share preferences; no item content is required.
+
+Q: Matrix factorization for recommendations approximates the user-item matrix as [E]
+- a sum of two matrices
+* the product of low-dimensional user and item embedding matrices
+- a diagonal matrix
+- a decision tree per user
+> The predicted score is the dot product of a user vector and an item vector learned from observed interactions.
+
+Q: The cold-start problem refers to [E]
+- slow model inference
+* difficulty recommending for new users or new items that have little or no interaction history
+- low GPU temperature
+- training divergence at the first step
+> Content features, popularity priors, onboarding questions and exploration help until enough interactions accumulate.
+
+Q: Large-scale recommender systems use a multi-stage pipeline (retrieval, ranking, re-ranking) because [M]
+- a single model cannot be trained
+* scoring every item with a heavy model is too expensive, so cheap models narrow millions of items to hundreds before precise ranking
+- regulations require three models
+- it removes the need for features
+> Candidate generation optimizes recall at low cost; the ranker uses rich features for precision; re-ranking applies diversity and business rules.
+
+Q: In a two-tower retrieval model, the user and item towers interact [M]
+- at every layer through cross-attention
+* only at the end, through a dot product or cosine similarity of their embeddings
+- through a shared decision tree
+- not at all
+> Late interaction lets item embeddings be precomputed and indexed for approximate nearest-neighbour search.
+
+Q: In-batch negative sampling for two-tower training introduces a bias because [H]
+- negatives are too easy to compute
+* popular items appear as negatives more often, so they are over-penalized; a logQ correction compensates
+- positives are missing
+- the batch is too small to compute gradients
+> Items are sampled in proportion to their frequency; subtracting the log of the sampling probability from the logits corrects the sampled softmax.
+
+Q: Implicit feedback (clicks, watches) differs from explicit feedback (ratings) in that [M]
+- it is scarcer
+* it is abundant but noisy and has no true negatives, since not interacting may mean not seeing
+- it cannot be used for training
+- it is always unbiased
+> Unobserved items are a mix of dislikes and non-exposure, so training uses sampled negatives and confidence weighting.
+
+Q: Position bias in click logs means [M]
+- items are stored in the wrong position
+* users click higher-ranked results more often regardless of relevance
+- embeddings depend on position encodings
+- ranking models ignore order
+> Training on raw clicks would reinforce the existing ranking; inverse propensity weighting or a position feature used only in training mitigates this.
+
+Q: A pairwise learning-to-rank loss such as RankNet or BPR optimizes [M]
+- the absolute score of each item
+* the relative order of pairs of items for the same query or user
+- the full permutation in one step
+- the number of items retrieved
+> Pointwise losses predict a label per item, pairwise losses order pairs, and listwise losses (such as ListNet or LambdaRank-style objectives) consider the whole list.
+
+Q: Hashing categorical ids into a fixed number of embedding rows (the "hashing trick") trades [M]
+- accuracy for interpretability
+* memory for collisions, where unrelated ids share an embedding
+- training speed for inference speed
+- recall for precision exactly
+> It bounds table size for very high-cardinality features; multiple hashes or frequency-based allocation reduce the harm of collisions.
+
+Q: A feedback loop in a recommender system arises because [M]
+- gradients flow backwards
+* the model's own recommendations determine what users see and click, which becomes the next training data
+- users give explicit ratings
+- the model is retrained too rarely
+> This can amplify popularity and narrow exposure; exploration and counterfactual corrections keep the data informative.
+
+Q: Wide & Deep models combine [M]
+- two identical deep networks
+* a linear model over cross-product features (memorization) with a deep network over embeddings (generalization)
+- a CNN and an RNN
+- matrix factorization with k-means
+> The wide part memorizes specific feature co-occurrences; the deep part generalizes to unseen combinations.
+
+Q: For a retrieval stage, the most appropriate offline metric is [M]
+- NDCG@1 of the final ranking
+* recall@k: the fraction of relevant items that appear in the candidate set
+- training loss of the ranker
+- AUC of click prediction
+> Retrieval must not miss relevant items; ordering within the candidate set is the ranker's job.
+
+Q: Product quantization in approximate nearest-neighbour search [H]
+- increases embedding dimension
+* splits each vector into sub-vectors and replaces each by the id of its nearest codebook centroid, compressing memory dramatically
+- sorts vectors by norm
+- removes the need for an index
+> Distances are approximated from small lookup tables; combined with an inverted file (IVF-PQ) it scales to billions of vectors.
+
+Q: Maximum inner product search (MIPS) differs from cosine similarity search in that [H]
+- it ignores vector direction
+* vector norms affect the score, so items with large norms can dominate unless embeddings are normalized
+- it cannot use approximate indexes
+- it requires binary vectors
+> Inner product equals cosine times the norms; many ANN libraries reduce MIPS to nearest-neighbour search through normalization or augmentation tricks.
+
+Q: Calibration matters for an ads click-through-rate model because [M]
+- only the ranking of ads matters
+* predicted probabilities feed into auctions and bids (expected value = bid x pCTR), so systematic over- or under-prediction costs money
+- it reduces training time
+- it removes position bias
+> Unlike pure ranking, pricing and budget pacing depend on the absolute probability values.
+
+Q: Multi-task ranking models (for example predicting click, like and watch time together) often use architectures such as MMoE to [H]
+- reduce the number of tasks
+* share representation through several experts with task-specific gates, limiting negative transfer between conflicting tasks
+- avoid using embeddings
+- train each task on a separate dataset with no shared parameters
+> Gating lets each task weight the shared experts differently instead of forcing one shared bottom.
+
+Q: Sequential recommenders such as SASRec model a user by [M]
+- a single static embedding from matrix factorization
+* applying self-attention over the user's ordered interaction history to predict the next item
+- averaging item popularity
+- clustering users with k-means
+> Treating item ids like tokens captures short-term intent and order effects that static factorization misses.
+
+Q: Exploration in recommender systems is necessary because [M]
+- users dislike relevant items
+* without showing uncertain items the system never collects the data needed to learn their true value
+- it lowers serving cost
+- it makes the model deterministic
+> Bandit-style strategies (epsilon-greedy, Thompson sampling) trade short-term engagement for information that improves future recommendations.
+
+Q: Which is a common cause of training-serving skew in recommender systems? [M]
+- Using GPUs for training
+* Features computed differently (or at a different time) offline and online, such as using future information in training logs
+- Too many negative samples
+- Using embeddings
+> Logging the features at serving time and reusing them for training, or a shared feature store, keeps the two paths consistent.
+
+Q: Diversity-aware re-ranking methods such as maximal marginal relevance (MMR) select items by [M]
+- relevance only
+* balancing relevance with dissimilarity to items already selected
+- random shuffling
+- item price
+> MMR greedily picks the item maximizing lambda * relevance - (1 - lambda) * max similarity to the chosen set.
+
+Q: The alternating least squares (ALS) algorithm for matrix factorization works by [H]
+- stochastic gradient descent on both factor matrices at once
+* fixing the item factors and solving a least-squares problem for the user factors, then alternating
+- eigendecomposition of the rating matrix
+- sampling from a posterior
+> With one side fixed the objective is quadratic and has a closed-form ridge solution per user (or item), which parallelizes well.
+
+Q: Semantic IDs for generative retrieval represent each item as [H]
+- a random integer
+* a short sequence of discrete codes derived from its content embedding (for example by residual quantization), which a sequence model generates
+- a one-hot vector over all items
+- its title text only
+> Similar items share code prefixes, so an autoregressive model can generalize to new items and retrieve by decoding codes.
+
+Q: When evaluating a new ranker offline on logs collected by the old ranker, inverse propensity scoring is used to [H]
+- speed up evaluation
+* correct for the fact that the old policy chose which items were shown
+- remove duplicates
+- increase the number of positives
+> Counterfactual estimators reweight logged outcomes by the inverse probability that the logging policy showed the item.
+
+Q: Dwell time or watch time is often preferred to clicks as a training signal because [M]
+- it is easier to log
+* clicks alone reward clickbait, while time spent better reflects satisfaction
+- it is binary
+- it has no noise
+> Optimizing a proxy shapes the product; engagement-quality signals and explicit feedback reduce clickbait incentives.

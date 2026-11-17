@@ -1,0 +1,178 @@
+# topic: Architecture Building Blocks
+# id: blocks
+# subtopics: Normalization layers (Batch, Layer, Instance, Group, RMS, Weight); Positional information (sinusoidal, learned, relative, RoPE, 2-D and time embeddings); Skip connections (residual, dense, highway, U-Net); Gating and squeeze-excitation; Pooling and readout; Embedding layers; Message passing in GNNs; Conditioning mechanisms (FiLM, cross-attention, AdaNorm)
+
+Q: For a feature map of shape (N, C, H, W), which axes does each normalization average over? Pick the correct statement. [M]
+- BatchNorm: (C, H, W); LayerNorm: (N, H, W)
+* BatchNorm: (N, H, W) per channel; LayerNorm: (C, H, W) per example
+- InstanceNorm: (N, C); GroupNorm: (N)
+- All four average over (N, C, H, W)
+> BatchNorm pools over batch and space for each channel; LayerNorm over all features of one example; InstanceNorm over (H, W) per example and channel; GroupNorm over (H, W) and a group of channels.
+
+Q: GroupNorm with a single group over all channels is equivalent to [M]
+- BatchNorm
+* LayerNorm (over C, H, W)
+- InstanceNorm
+- no normalization
+> One group covers every channel of an example. At the other extreme, one channel per group gives InstanceNorm.
+
+Q: InstanceNorm is popular in style transfer and image generation because [M]
+- it uses batch statistics
+* it removes per-image, per-channel contrast and style statistics, which are then easy to re-inject
+- it has no parameters and no effect
+- it works only on text
+> Feature-map means and variances encode style; normalizing them per instance (and modulating them, as in AdaIN) controls style independently of content.
+
+Q: The learnable scale (gamma) and shift (beta) in normalization layers exist to [E]
+- make the layer slower
+* let the network recover any desired mean and variance, including undoing the normalization
+- store the running statistics
+- replace the activation function
+> Normalization constrains activations to zero mean and unit variance; the affine parameters restore representational flexibility.
+
+Q: Zero-initializing the last normalization scale (gamma) in each residual branch [H]
+- disables the network permanently
+* makes every residual block start as the identity, which stabilizes early training of deep networks
+- doubles the learning rate
+- removes the need for skip connections
+> With the residual branch outputting zero at initialization, signal and gradients pass through the skips unchanged, which helps very deep models train.
+
+Q: Weight normalization differs from batch normalization in that it [H]
+- normalizes activations with batch statistics
+* reparameterizes each weight vector as a learned magnitude times a unit direction, independent of the batch
+- is applied only at test time
+- requires group statistics
+> w = g * v / ||v|| decouples length from direction without using data statistics, so it works for RNNs and small batches.
+
+Q: Why does a bias term become redundant in a convolution that is immediately followed by BatchNorm? [M]
+- BatchNorm multiplies the bias by zero at random
+* BatchNorm subtracts the per-channel mean, cancelling any constant offset, and has its own shift parameter
+- Convolutions cannot have biases
+- The bias makes training unstable
+> Any constant added per channel is removed by mean subtraction; beta plays the role of the bias.
+
+Q: A residual block computes y = x + F(x). Its Jacobian with respect to x is [M]
+- the Jacobian of F only
+* the identity plus the Jacobian of F
+- zero
+- the identity only
+> The identity term gives gradients a direct path, so they do not have to pass through F's possibly small Jacobian.
+
+Q: DenseNet-style skip connections differ from ResNet-style ones in that features from earlier layers are [M]
+- added element-wise
+* concatenated along the channel dimension, so each layer sees all preceding feature maps
+- multiplied
+- discarded
+> Concatenation preserves earlier features unchanged and encourages feature reuse, at the cost of growing channel counts.
+
+Q: Highway networks, a precursor to ResNets, use skip connections that are [H]
+- always identity
+* gated: y = T(x) * H(x) + (1 - T(x)) * x with a learned gate T
+- concatenations
+- applied only at the output layer
+> A learned transform gate decides how much of the input to carry. ResNets showed that ungated identity shortcuts work as well or better.
+
+Q: When a residual block changes the number of channels or the spatial size, the shortcut is typically [M]
+- removed
+* a 1 x 1 convolution (projection), possibly strided, to match dimensions
+- a fully connected layer over the whole image
+- a dropout layer
+> Element-wise addition needs matching shapes; a learned linear projection aligns the skip path.
+
+Q: U-Net skip connections differ from ResNet skips in that they [M]
+- connect consecutive layers by addition
+* connect encoder and decoder stages of equal resolution, usually by concatenation, to restore spatial detail
+- skip the loss function
+- are used only in classification
+> Long-range skips transfer high-resolution features lost by down-sampling; they are central to segmentation models and diffusion U-Nets.
+
+Q: Learned absolute position embeddings have which limitation compared with sinusoidal or relative schemes? [M]
+- They cannot be trained
+* They are defined only up to the maximum length seen in training and do not extrapolate beyond it
+- They require convolution
+- They make attention quadratic
+> A lookup table has one vector per position index; positions beyond the table have no embedding.
+
+Q: Relative position biases (as in T5 or Swin) inject position by [M]
+- adding a vector to the token embedding
+* adding a learned scalar, indexed by the offset between query and key, to each attention logit
+- rotating the embeddings
+- concatenating coordinates to the output
+> Attention then depends on distance rather than absolute location, which generalizes across positions and suits translation-equivariant data.
+
+Q: Vision Transformers adapt 1-D position embeddings to a different image resolution at fine-tuning time by [H]
+- deleting them
+* 2-D interpolating the learned position-embedding grid to the new number of patches
+- re-training from scratch
+- using random values
+> The embeddings form a grid that can be resized smoothly, preserving the learned spatial structure.
+
+Q: Diffusion models tell the network which noise level it is denoising by [M]
+- training a separate network per step
+* embedding the timestep (often sinusoidally), passing it through an MLP and injecting it into each block
+- appending the step number to the image filename
+- changing the learning rate
+> The timestep embedding conditions every residual block, typically by addition to the features or by modulating normalization scales.
+
+Q: FiLM conditioning modulates a network by [H]
+- concatenating the condition to the output
+* applying a per-channel scale and shift, predicted from the conditioning input, to intermediate features
+- replacing convolution with attention
+- freezing the weights
+> Feature-wise linear modulation (gamma * h + beta) is the mechanism behind conditional normalization layers, AdaIN and many class- or time-conditioned models.
+
+Q: A squeeze-and-excitation block [M]
+- squeezes the spatial size by pooling and stops
+* global-average-pools each channel, passes the result through a small MLP with a sigmoid and rescales the channels
+- removes half of the channels
+- is a kind of dropout
+> It is a lightweight channel-attention mechanism that reweights channels according to global context.
+
+Q: In a graph neural network layer, a node's representation is updated by [M]
+- convolving over a fixed grid
+* aggregating messages from its neighbours with a permutation-invariant function and combining them with its own state
+- attending to all tokens in a sentence
+- sorting the nodes by degree
+> Message passing uses sum, mean or max (or attention weights, as in GAT) so that the result does not depend on neighbour ordering.
+
+Q: Stacking many GNN layers often leads to "over-smoothing", meaning [H]
+- gradients explode
+* node representations become nearly indistinguishable as repeated neighbourhood averaging mixes information across the graph
+- the graph loses its edges
+- the model becomes linear
+> Each layer acts like a low-pass filter; residual connections, normalization and jumping-knowledge connections mitigate it.
+
+Q: An embedding layer is mathematically equivalent to [E]
+- a convolution with a large kernel
+* a linear layer applied to one-hot vectors, implemented as a table lookup
+- a softmax
+- a normalization layer
+> Multiplying a one-hot vector by a weight matrix selects one row, so the lookup avoids materializing the one-hot input.
+
+Q: Global average pooling and attention pooling are both examples of [M]
+- normalization
+* readout operations that reduce a variable-size set of features to a fixed-size vector
+- positional encodings
+- skip connections
+> A readout must be permutation-invariant for sets and graphs; attention pooling learns the weights instead of using a uniform mean.
+
+Q: LayerScale, used in deep Vision Transformers such as CaiT, [H]
+- scales the input image
+* multiplies each residual branch's output by a learnable per-channel factor initialized to a small value
+- normalizes across the batch
+- removes skip connections
+> Starting the residual contributions near zero stabilizes optimization as depth increases, similar in spirit to zero-initialized gamma and ReZero.
+
+Q: In which architecture family is normalization typically applied before the non-linearity inside each residual branch as "norm, activation, convolution"? [H]
+- The original (post-activation) ResNet
+* Pre-activation ResNet (ResNet v2)
+- VGG
+- LeNet
+> He et al.'s identity-mappings paper moved BatchNorm and ReLU before the convolutions, leaving a clean identity path, the convolutional analogue of pre-norm Transformers.
+
+Q: Cross-attention is used as a conditioning mechanism in text-to-image diffusion models by [M]
+- replacing the noise schedule
+* letting image features (queries) attend to text-encoder token embeddings (keys and values)
+- concatenating text to the pixel values
+- adding the caption to the loss
+> Spatial features query the prompt's token representations at several resolutions, which lets different regions bind to different words.

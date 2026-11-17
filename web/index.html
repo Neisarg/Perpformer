@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prepformer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=STIX+Two+Text:ital,wght@0,400;0,600;1,400&display=swap" media="print" onload="this.media='all'">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css" media="print" onload="this.media='all'">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/" aria-label="Overview">
+    <span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+    <span id="brand-name">Prepformer</span>
+  </a>
+  <nav id="nav" aria-label="Sections">
+    <a href="#/" data-nav="home">Overview</a>
+    <a href="#/learn" data-nav="learn">Learn</a>
+    <a href="#/mcq" data-nav="mcq">Multiple choice</a>
+    <a href="#/code" data-nav="code">Coding</a>
+    <a href="#/topics" data-nav="topics">Topics</a>
+    <a href="#/import" data-nav="import">Add material</a>
+  </nav>
+  <div class="top-right">
+    <a class="chip-link" id="profile-chip" href="#/profile">Profile</a>
+    <button class="icon-btn" id="settings-btn" type="button" aria-label="Settings" title="Settings">
+      <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 5h8M15 5h2M3 10h2M9 10h8M3 15h9M16 15h1"/><circle cx="13" cy="5" r="2"/><circle cx="7" cy="10" r="2"/><circle cx="14" cy="15" r="2"/></svg>
+    </button>
+  </div>
+</header>
+<div id="banner" hidden></div>
+<main id="view" tabindex="-1"><p class="loading">Loading the question bank</p></main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="/core.js"></script>
+<script src="/mcq.js"></script>
+<script src="/code.js"></script>
+<script src="/learn.js"></script>
+<script src="/pages.js"></script>
+</body>
+</html>
